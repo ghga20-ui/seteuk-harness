@@ -31,4 +31,22 @@ def check_text(text: str, profile: dict, exempt: bool = False):
     if match:
         issues.append(("FAIL", "BANNED_CHAR", f"금지 특수문자 '{match.group()}' 포함"))
 
+    # 바이트 한도 및 문두 검사
+    limit = int(profile.get("상한바이트", 760))
+    target = int(profile.get("목표바이트", 700))
+    if nbytes > limit:
+        issues.append(("FAIL", "BYTE_OVER", f"{nbytes}바이트로 상한 {limit} 초과"))
+    elif not exempt and nbytes < target - 80:
+        issues.append(("WARN", "BYTE_UNDER", f"{nbytes}바이트로 목표 {target}에 크게 미달"))
+
+    if not exempt:
+        prefix = profile.get("문두", "")
+        if prefix and not text.startswith(prefix):
+            issues.append(("FAIL", "OPENING", f"문두가 '{prefix}'로 시작하지 않음"))
+
     return nbytes, issues
+
+
+def find_name_intrusions(text: str, names: list[str]) -> list[str]:
+    """본문에 등장한 학생 이름 목록을 반환한다(본인 포함 — 이름 기재 자체가 금지)."""
+    return [name for name in names if name and name in text]
