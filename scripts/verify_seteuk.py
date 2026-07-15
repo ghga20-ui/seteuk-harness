@@ -121,6 +121,11 @@ def main(argv=None) -> int:
     with open(args.profile, encoding="utf-8") as f:
         profile = json.load(f)
 
+    total_students = sum(len(cls.get("students", [])) for cls in drafts.get("classes", []))
+    if total_students == 0:
+        print("오류: 초안에 학생이 없습니다. 초안 JSON의 classes/students 구조를 확인하세요.")
+        return 1
+
     report = verify_drafts(drafts, profile)
     for row in report["rows"]:
         for level, code, msg in row["issues"]:
@@ -131,7 +136,16 @@ def main(argv=None) -> int:
         print("저장 차단: FAIL을 모두 해소한 뒤 다시 실행하세요.")
         return 1
     if args.save:
-        save_xlsx(drafts, report, args.save)
+        import os
+
+        tmp_path = args.save + ".tmp"
+        try:
+            save_xlsx(drafts, report, tmp_path)
+            os.replace(tmp_path, args.save)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
         print(f"저장 완료: {args.save}")
     return 0
 

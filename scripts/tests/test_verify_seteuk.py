@@ -150,3 +150,34 @@ def test_cli_blocks_save_on_fail(tmp_path):
     assert not out.exists()
     assert "FAIL" in proc.stdout
     assert "저장 차단" in proc.stdout
+
+
+def test_cli_rejects_empty_drafts(tmp_path):
+    drafts_path = tmp_path / "d.json"
+    profile_path = tmp_path / "p.json"
+    out = tmp_path / "out.xlsx"
+    drafts_path.write_text(json.dumps({"classes": []}, ensure_ascii=False), encoding="utf-8")
+    profile_path.write_text(json.dumps(PROFILE, ensure_ascii=False), encoding="utf-8")
+    script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
+    proc = subprocess.run(
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 1
+    assert not out.exists()
+
+
+def test_cli_success_path_saves(tmp_path):
+    drafts_path = tmp_path / "d.json"
+    profile_path = tmp_path / "p.json"
+    out = tmp_path / "out.xlsx"
+    drafts_path.write_text(json.dumps(make_drafts(), ensure_ascii=False), encoding="utf-8")
+    profile_path.write_text(json.dumps(PROFILE, ensure_ascii=False), encoding="utf-8")
+    script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
+    proc = subprocess.run(
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 0
+    assert out.exists()
+    assert "저장 완료" in proc.stdout
