@@ -13,7 +13,7 @@ import re
 BANNED_WORDS = ["단순히", "또한", "이를 통해", "바탕으로", "무엇보다", "단순한", "넘어"]
 INEUN = re.compile(r"(?:^|[ ,.'])이는(?=[ ,.]|$)")
 # 규칙정본 '특수문자' — 작은따옴표(')는 도서명 전용으로 허용
-BANNED_CHARS = re.compile("[·\\-<>“”‘’*※①-⑳#&@]")
+BANNED_CHARS = re.compile("[·\\-<>\"“”‘’*※①-⑳#&@]")
 
 
 def check_text(text: str, profile: dict, exempt: bool = False):

@@ -36,6 +36,12 @@ def test_banned_char_hyphen():
     assert ("FAIL", "BANNED_CHAR") in codes(issues)
 
 
+def test_banned_char_straight_double_quote():
+    text = '가상 활동에서 "인용문"을 정리함.'
+    _, issues = check_text(text, PROFILE, exempt=True)
+    assert ("FAIL", "BANNED_CHAR") in codes(issues)
+
+
 def test_single_quote_allowed_for_book_title():
     text = "가상 활동에서 '가상의 책(작가)'을 읽고 감상을 정리함."
     _, issues = check_text(text, PROFILE, exempt=True)
