@@ -148,3 +148,5 @@ def test_cli_blocks_save_on_fail(tmp_path):
     )
     assert proc.returncode == 1
     assert not out.exists()
+    assert "FAIL" in proc.stdout
+    assert "저장 차단" in proc.stdout

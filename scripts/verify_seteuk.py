@@ -104,6 +104,11 @@ def save_xlsx(drafts: dict, report: dict, out_path: str) -> None:
 def main(argv=None) -> int:
     import argparse
     import json
+    import sys
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
 
     parser = argparse.ArgumentParser(description="세특 결정론 채점기 + 저장 게이트")
     parser.add_argument("drafts", help="초안 JSON 경로")
