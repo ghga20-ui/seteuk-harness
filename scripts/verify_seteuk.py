@@ -127,6 +127,12 @@ def save_xlsx(drafts: dict, report: dict, out_path: str) -> None:
     nbytes_map = {(r["반"], r["학번"]): r["바이트"] for r in report["rows"]}
     wb = Workbook()
     wb.remove(wb.active)
+    notice = wb.create_sheet("안내")
+    notice["A1"] = "AI 초안 — 교사 검수 전"
+    notice["A2"] = "이 파일의 세특은 AI가 생성한 초안입니다. 교사가 실제 수행과의 일치, 허위·과장 여부,"
+    notice["A3"] = "기재요령 준수를 검수·승인하기 전에는 NEIS에 입력할 수 없습니다."
+    notice["A1"].font = Font(bold=True, size=14, color="C00000")
+    notice.column_dimensions["A"].width = 90
     for cls in drafts.get("classes", []):
         ws = wb.create_sheet(cls.get("name", "시트"))
         ws.append(["학번", "이름", "핵심소재", "톤등급", "세특", "바이트수", "비고"])
@@ -171,6 +177,11 @@ def main(argv=None) -> int:
     if args.roster:
         with open(args.roster, encoding="utf-8") as f:
             roster = json.load(f)
+
+    if not str(profile.get("평가자료", "")).strip():
+        print("차단: 교사의 평가 자료(채점표, 루브릭 점수, 관찰 기록 등)가 확인되지 않았습니다.")
+        print("이 도구는 평가를 대신하지 않습니다. 채점을 먼저 완료하고 활동프로파일의 평가자료 항목에 출처를 기록하세요.")
+        return 1
 
     total_students = sum(len(cls.get("students", [])) for cls in drafts.get("classes", []))
     if total_students == 0:

@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from verify_seteuk import check_text, find_name_intrusions, save_xlsx, verify_drafts
 
-PROFILE = {"활동명": "가상 활동", "문두": "가상 활동에서", "목표바이트": 700, "상한바이트": 760}
+PROFILE = {"활동명": "가상 활동", "문두": "가상 활동에서", "목표바이트": 700, "상한바이트": 760,
+           "평가자료": "가상 채점표(테스트)"}
 
 
 def codes(issues):
