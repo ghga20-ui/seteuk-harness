@@ -120,11 +120,15 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None) -> di
 
 
 def save_xlsx(drafts: dict, report: dict, out_path: str) -> None:
-    """검증 보고서와 함께 반별 시트로 저장한다. 호출 전 FAIL 0을 보장할 것."""
+    """검증 보고서와 함께 반별 시트로 저장한다. 호출 전 FAIL 0을 보장할 것.
+
+    바이트수 열은 정적 값이 아니라 엑셀 수식으로 넣는다 — 교사가 검수 중
+    세특을 고치면 바이트가 실시간으로 재계산되어 분량 조절이 수월하다.
+    수식 (LENB-LEN)*2+LEN 은 한글 3바이트 환산으로 UTF-8 기준과 일치한다.
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
-    nbytes_map = {(r["반"], r["학번"]): r["바이트"] for r in report["rows"]}
     wb = Workbook()
     wb.remove(wb.active)
     notice = wb.create_sheet("안내")
@@ -140,10 +144,10 @@ def save_xlsx(drafts: dict, report: dict, out_path: str) -> None:
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="D9E1F2")
             cell.alignment = Alignment(horizontal="center", vertical="center")
-        for s in cls.get("students", []):
+        for row_idx, s in enumerate(cls.get("students", []), start=2):
             ws.append([s.get("학번", ""), s.get("이름", ""), s.get("핵심소재", ""),
                        s.get("톤등급", ""), s.get("세특", ""),
-                       nbytes_map.get((cls.get("name", ""), s.get("학번", "")), ""),
+                       f"=(LENB(E{row_idx})-LEN(E{row_idx}))*2+LEN(E{row_idx})",
                        s.get("비고", "")])
         for col, width in zip("ABCDEFG", [8, 8, 24, 7, 90, 8, 30]):
             ws.column_dimensions[col].width = width

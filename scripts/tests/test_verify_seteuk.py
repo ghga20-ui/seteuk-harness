@@ -131,6 +131,19 @@ def test_save_xlsx_writes_file(tmp_path):
     assert out.exists()
 
 
+def test_saved_xlsx_byte_column_is_live_formula(tmp_path):
+    from openpyxl import load_workbook
+
+    drafts = make_drafts()
+    report = verify_drafts(drafts, PROFILE)
+    out = tmp_path / "out.xlsx"
+    save_xlsx(drafts, report, str(out))
+    ws = load_workbook(str(out))["1반"]
+    value = ws["F2"].value
+    assert isinstance(value, str) and value.startswith("=")
+    assert "LENB(E2)" in value and "LEN(E2)" in value
+
+
 def test_cli_blocks_save_on_fail(tmp_path):
     drafts_path = tmp_path / "d.json"
     profile_path = tmp_path / "p.json"
