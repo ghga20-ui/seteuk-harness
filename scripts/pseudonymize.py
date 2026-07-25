@@ -57,6 +57,20 @@ def _find_header_indices(rows):
     return (None, None, None, -1)
 
 
+STATUS_WORDS = {
+    "자퇴", "전출", "전입", "미등록", "휴학", "제적", "유예", "면제", "결시", "미응시",
+}
+
+
+def _is_status_word(name: str) -> bool:
+    """이름 칸 값이 학생 상태 표기어인지 확인한다(공백 제거 후 완전 일치).
+
+    실제 채점표에서 학번은 살아 있는데 이름 칸에 '자퇴' 같은 상태 문구가 적힌
+    행이 있었다 — 이런 행은 학생이 아니므로 명렬에 포함하면 안 된다.
+    """
+    return re.sub(r"\s+", "", name or "") in STATUS_WORDS
+
+
 def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx, surname_idx=None):
     """헤더 행의 열 인덱스를 사용해 (학번, 이름) 쌍을 추출.
 
@@ -74,10 +88,13 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx, surnam
     상태가 된다 — 결합이 그 문제를 원천적으로 없앤다.
 
     학번·이름 중 하나만 비어 있는 데이터 행은 건너뛰고 건너뛴 행 수를 함께
-    반환한다(둘 다 비어 있는 완전한 공백 행은 집계하지 않는다).
+    반환한다(둘 다 비어 있는 완전한 공백 행은 집계하지 않는다). 이름 칸이
+    상태 표기어(자퇴 등)인 행도 학생이 아니므로 건너뜀에 포함한다 — 반환값에
+    상태 표기로 건너뛴 건수를 별도로 함께 돌려준다(안내 문구 분기용).
     """
     pairs, seen = [], set()
     skipped = 0
+    status_skipped = 0
     for i, row in enumerate(rows):
         if i == header_row_idx:  # 헤더 행 자체는 데이터에서 제외
             continue
@@ -97,11 +114,15 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx, surnam
         if not (sid_ok and name_ok):
             skipped += 1
             continue
+        if _is_status_word(name):
+            skipped += 1
+            status_skipped += 1
+            continue
         if sid in seen:
             continue
         seen.add(sid)
         pairs.append({"학번": sid, "이름": name})
-    return pairs, skipped
+    return pairs, skipped, status_skipped
 
 
 def _pairs_from_rows_pattern(rows):
@@ -130,7 +151,7 @@ def detect_roster(path) -> dict:
 
     if id_idx is not None and name_idx is not None:
         # 헤더 기반 추출
-        students, skipped = _pairs_from_rows_with_indices(
+        students, skipped, status_skipped = _pairs_from_rows_with_indices(
             rows, id_idx, name_idx, header_row_idx, surname_idx
         )
         if not students:
@@ -139,7 +160,7 @@ def detect_roster(path) -> dict:
             방식 = "표헤더"
         result = {
             "students": students, "출처": str(path), "방식": 방식,
-            "확인필요": False, "건너뜀": skipped,
+            "확인필요": False, "건너뜀": skipped, "상태표기건너뜀": status_skipped,
         }
         if surname_idx is not None:
             result["성이름결합"] = True
@@ -386,25 +407,177 @@ def parse_memo_text(path):
 
 SCORE_HEADER_ALIASES = {"점수", "총점", "합계", "평가점수"}
 
+# '총점'은 그 자체로 전체 합계를 뜻하므로 상위 병합 라벨(예: "소설 비평하기")을
+# 붙이지 않는다. 반대로 '점수'/'합계'/'평가점수'는 여러 하위 영역(소설 비평하기,
+# 시 비평하기 등)에 반복해서 나타날 수 있는 일반 라벨이라, 왼쪽에서 가장 가까운
+# 상위 구간 라벨과 결합해야만("소설 비평하기 > 점수") 서로 구별된다.
+GROUP_TERMINAL_ALIASES = {"총점"}
 
-def _find_score_header_indices(rows, column=None):
-    """헤더 행에서 (학번열, 점수열, 헤더행번호)를 찾는다. 없으면 (None, None, -1).
+_COLUMN_LETTER_RE = re.compile(r"[A-Za-z]{1,3}")
 
-    column이 주어지면(--column 지정) 공백 무시 비교로 그 헤더만 점수 열로 인정한다.
-    지정이 없으면 SCORE_HEADER_ALIASES 중 하나를 자동 탐지한다.
+
+def _looks_like_column_letter(s: str) -> bool:
+    """'--column'에 엑셀 열 문자(J, R, AA 등)가 주어졌는지 판별한다."""
+    return bool(_COLUMN_LETTER_RE.fullmatch((s or "").strip()))
+
+
+def _col_letter(idx: int) -> str:
+    """0-based 열 인덱스를 엑셀 열 문자로 변환한다(0->A, 25->Z, 26->AA)."""
+    idx += 1
+    letters = ""
+    while idx > 0:
+        idx, rem = divmod(idx - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def _col_index_from_letter(letter: str) -> int:
+    """엑셀 열 문자를 0-based 인덱스로 변환한다(A->0, Z->25, AA->26)."""
+    letter = letter.strip().upper()
+    idx = 0
+    for ch in letter:
+        idx = idx * 26 + (ord(ch) - 64)
+    return idx - 1
+
+
+def _find_label_row(rows):
+    """학번/번호 열이 있는 행을 라벨 행(실제 열 헤더가 나열되는 행)으로 판정한다.
+
+    제목 행(전체 병합)이나 하위 문항 행(문항1, 문항2 등)과 구분하기 위한
+    기준이다 — 학번 열이 있는 행이 곧 "이 표의 열 이름이 나열된 행"이다.
+    없으면 (None, -1).
     """
-    target = _normalize_header(column) if column else None
     for i, row in enumerate(rows):
         id_idx = next((j for j, c in enumerate(row) if c in ("학번", "번호")), None)
-        if target:
-            score_idx = next((j for j, c in enumerate(row) if _normalize_header(c) == target), None)
+        if id_idx is not None:
+            return (id_idx, i)
+    return (None, -1)
+
+
+def _find_score_candidates(rows):
+    """라벨 행에서 점수 열 후보를 전부 찾는다(다중 헤더의 병합 라벨 결합 포함).
+
+    라벨 행을 왼쪽에서 오른쪽으로 훑으며 "현재 구간 라벨"을 갱신한다(학번·이름
+    열과 점수 별칭 자체는 구간 라벨 후보에서 제외). 점수 별칭 열을 만나면 그
+    시점의 구간 라벨을 붙여 후보로 기록한다 — 병합 셀은 read_only 모드에서
+    왼쪽 상단 셀에만 값이 있고 나머지는 빈 문자열로 읽히므로, 빈 셀을 만나도
+    구간 라벨을 그대로 유지하면 자연히 병합 범위 전체에 적용된다.
+
+    반환: [(col_idx, label), ...]. col_idx는 0-based.
+    """
+    id_idx, header_row_idx = _find_label_row(rows)
+    if id_idx is None:
+        return []
+    row = rows[header_row_idx]
+    candidates = []
+    current_group = None
+    for j, cell in enumerate(row):
+        if j == id_idx:
+            continue
+        normalized = _normalize_header(cell)
+        if not normalized or normalized == "이름":
+            continue
+        if normalized in SCORE_HEADER_ALIASES:
+            label = cell.strip()
+            if normalized not in GROUP_TERMINAL_ALIASES and current_group:
+                label = f"{current_group} > {label}"
+            candidates.append((j, label))
         else:
-            score_idx = next(
-                (j for j, c in enumerate(row) if _normalize_header(c) in SCORE_HEADER_ALIASES), None
-            )
-        if id_idx is not None and score_idx is not None:
-            return (id_idx, score_idx, i)
-    return (None, None, -1)
+            current_group = cell.strip()
+    return candidates
+
+
+def _resolve_score_column(rows, column=None):
+    """점수 열을 결정한다(다중 후보 시 자동 선택 금지 — fail-closed).
+
+    반환은 항상 "status" 키를 포함한 dict다:
+    - {"status": "no_id"}: 학번/번호 열 자체를 못 찾음
+    - {"status": "not_found"}: 점수 열 후보가 0개(또는 --column 지정 열을 못 찾음)
+    - {"status": "ambiguous", "candidates": [{"letter","label","col_idx"}, ...]}:
+      --column 없이 점수 열 후보가 2개 이상이라 자동 선택을 거부해야 하는 경우
+    - {"status": "ok", "id_idx", "score_idx", "header_row_idx", "letter", "label"}
+    """
+    id_idx, header_row_idx = _find_label_row(rows)
+    if id_idx is None:
+        return {"status": "no_id"}
+
+    candidates = _find_score_candidates(rows)
+    candidate_map = dict(candidates)
+
+    if column:
+        column = column.strip()
+        if _looks_like_column_letter(column):
+            col_idx = _col_index_from_letter(column)
+            label = candidate_map.get(col_idx)
+            if label is None:
+                # 점수 별칭이 아닌 열을 열 문자로 직접 지정한 경우 — 원래 헤더
+                # 텍스트가 있으면 그것을, 없으면 열 문자 자체를 라벨로 쓴다.
+                row = rows[header_row_idx] if header_row_idx < len(rows) else []
+                raw = row[col_idx].strip() if col_idx < len(row) and row[col_idx] else ""
+                label = raw or _col_letter(col_idx)
+            return {
+                "status": "ok", "id_idx": id_idx, "score_idx": col_idx,
+                "header_row_idx": header_row_idx,
+                "letter": _col_letter(col_idx), "label": label,
+            }
+        target = _normalize_header(column)
+        row = rows[header_row_idx] if header_row_idx < len(rows) else []
+        col_idx = next((j for j, c in enumerate(row) if _normalize_header(c) == target), None)
+        if col_idx is None:
+            return {"status": "not_found"}
+        label = candidate_map.get(col_idx, column)
+        return {
+            "status": "ok", "id_idx": id_idx, "score_idx": col_idx,
+            "header_row_idx": header_row_idx,
+            "letter": _col_letter(col_idx), "label": label,
+        }
+
+    if not candidates:
+        return {"status": "not_found"}
+    if len(candidates) > 1:
+        return {
+            "status": "ambiguous",
+            "candidates": [
+                {"letter": _col_letter(idx), "label": label, "col_idx": idx}
+                for idx, label in candidates
+            ],
+        }
+    col_idx, label = candidates[0]
+    return {
+        "status": "ok", "id_idx": id_idx, "score_idx": col_idx,
+        "header_row_idx": header_row_idx,
+        "letter": _col_letter(col_idx), "label": label,
+    }
+
+
+def _resolve_named_column(rows, column):
+    """'--grade-column'처럼 점수 별칭과 무관하게 열 문자 또는 헤더 이름을 직접
+    지정하는 경우에 쓴다. 반환: (id_idx, header_row_idx, col_idx) — 못 찾으면
+    col_idx가 None이다.
+    """
+    id_idx, header_row_idx = _find_label_row(rows)
+    if id_idx is None:
+        return None, -1, None
+    column = (column or "").strip()
+    if _looks_like_column_letter(column):
+        return id_idx, header_row_idx, _col_index_from_letter(column)
+    target = _normalize_header(column)
+    row = rows[header_row_idx] if header_row_idx < len(rows) else []
+    col_idx = next((j for j, c in enumerate(row) if _normalize_header(c) == target), None)
+    return id_idx, header_row_idx, col_idx
+
+
+def _parse_column_range(spec: str):
+    """'E:J' 형식의 열 범위를 (시작 col_idx, 끝 col_idx) 0-based 포함 구간으로
+    변환한다. 형식이 올바르지 않으면 None."""
+    m = re.fullmatch(r"\s*([A-Za-z]{1,3})\s*:\s*([A-Za-z]{1,3})\s*", spec or "")
+    if not m:
+        return None
+    start = _col_index_from_letter(m.group(1))
+    end = _col_index_from_letter(m.group(2))
+    if start > end:
+        start, end = end, start
+    return start, end
 
 
 def _parse_number(cell):
@@ -418,18 +591,33 @@ def _parse_number(cell):
 
 
 def parse_score_xlsx(path, column=None):
-    """채점표 xlsx에서 (학번, 점수) 쌍을 추출한다.
+    """채점표 xlsx에서 점수 열을 찾아 (학번, 점수) 쌍을 추출한다.
 
-    점수 열 헤더('점수'/'총점'/'합계'/'평가점수' 중 하나, 공백 무시. --column
-    지정 시 해당 헤더만 인정)를 찾지 못하면 None을 반환한다(호출부가 exit 1 +
-    안내로 처리). 반환값은 (pairs, no_score_count) — pairs는 (학번, 점수)
-    리스트이고, no_score_count는 학번은 있으나 점수가 비었거나 숫자가 아니어서
-    건너뛴 행 수다(매핑 유무와 무관하게 이 단계에서 집계한다).
+    다중 헤더(제목 행 + 병합 구간 행 + 하위 문항 행)에서 점수 열 후보가 여럿
+    이면(예: 소설 비평하기 점수, 시 비평하기 점수, 총점) 조용히 하나를 고르지
+    않는다 — 반 전체의 톤 등급이 엉뚱한 열에서 파생되는 사고를 막기 위해서다.
+
+    반환:
+    - None: 학번 열이 없거나, 점수 열 후보가 하나도 없거나, --column으로 지정한
+      열을 찾지 못한 경우(호출부가 exit 1 + 안내로 처리)
+    - {"ambiguous": True, "candidates": [...]}: --column 없이 점수 열 후보가
+      2개 이상이라 자동 선택을 거부해야 하는 경우
+    - (pairs, no_score, letter, label): 정상 — pairs는 (학번, 점수) 리스트,
+      no_score는 학번은 있으나 점수가 비었거나 숫자가 아니어서 건너뛴 행 수,
+      letter/label은 실제로 사용한 열의 표시용 정보(엑셀 열 문자, 병합 라벨
+      결합 이름)다.
     """
     rows = _rows_from_xlsx(path)
-    id_idx, score_idx, header_row_idx = _find_score_header_indices(rows, column)
-    if id_idx is None or score_idx is None:
+    resolution = _resolve_score_column(rows, column=column)
+
+    if resolution["status"] in ("no_id", "not_found"):
         return None
+    if resolution["status"] == "ambiguous":
+        return {"ambiguous": True, "candidates": resolution["candidates"]}
+
+    id_idx = resolution["id_idx"]
+    score_idx = resolution["score_idx"]
+    header_row_idx = resolution["header_row_idx"]
 
     pairs = []
     no_score = 0
@@ -446,6 +634,77 @@ def parse_score_xlsx(path, column=None):
             no_score += 1
             continue
         pairs.append((sid, score))
+    return pairs, no_score, resolution["letter"], resolution["label"]
+
+
+def parse_grade_xlsx(path, column):
+    """채점표 xlsx에서 등급 열의 값을 점수 대신 그대로 가져온다((학번, 등급) 쌍).
+
+    점수 열이 아예 없는 채점표(A/B/C, 상/중/하 등 등급만 있는 경우)를 위한
+    경로다. column은 열 문자 또는 헤더 이름 중 하나다. 반환은 (pairs,
+    no_grade_count) — 못 찾으면 None.
+    """
+    rows = _rows_from_xlsx(path)
+    id_idx, header_row_idx, col_idx = _resolve_named_column(rows, column)
+    if id_idx is None or col_idx is None:
+        return None
+
+    pairs = []
+    no_grade = 0
+    for i, row in enumerate(rows):
+        if i == header_row_idx:
+            continue
+        if id_idx >= len(row):
+            continue
+        sid = row[id_idx]
+        if not sid or not STUDENT_ID.fullmatch(sid):
+            continue
+        grade = row[col_idx].strip() if col_idx < len(row) and row[col_idx] else ""
+        if not grade:
+            no_grade += 1
+            continue
+        pairs.append((sid, grade))
+    return pairs, no_grade
+
+
+def parse_sum_columns_xlsx(path, column_range):
+    """채점표 xlsx에서 지정 범위(예: 'E:J') 열의 숫자를 합산해 점수로 쓴다.
+
+    점수 열이 따로 없고 문항별 점수만 있는 채점표를 위한 경로다. 범위 내
+    비었거나 숫자가 아닌 셀은 0으로 취급하지 않고 그냥 건너뛰며(부분 합산),
+    범위 전체가 비었으면 그 행은 no_score로 집계한다. 반환은 (pairs,
+    no_score_count) — 학번 열을 못 찾거나 범위 형식이 잘못되면 None.
+    """
+    rows = _rows_from_xlsx(path)
+    id_idx, header_row_idx = _find_label_row(rows)
+    if id_idx is None:
+        return None
+    bounds = _parse_column_range(column_range)
+    if bounds is None:
+        return None
+    start, end = bounds
+
+    pairs = []
+    no_score = 0
+    for i, row in enumerate(rows):
+        if i == header_row_idx:
+            continue
+        if id_idx >= len(row):
+            continue
+        sid = row[id_idx]
+        if not sid or not STUDENT_ID.fullmatch(sid):
+            continue
+        total = 0.0
+        any_value = False
+        for c in range(start, min(end, len(row) - 1) + 1):
+            v = _parse_number(row[c])
+            if v is not None:
+                total += v
+                any_value = True
+        if not any_value:
+            no_score += 1
+            continue
+        pairs.append((sid, total))
     return pairs, no_score
 
 
@@ -546,7 +805,10 @@ def _cmd_roster(args) -> int:
         print("확인필요: 표 헤더를 찾지 못해 패턴으로 추정한 결과입니다. 원본 표를 확인해 주세요.")
     skipped = roster.get("건너뜀", 0)
     if skipped > 0:
-        print(f"경고: {skipped}개 행을 건너뛰었습니다(학번 또는 이름이 비어 있음). 명단을 확인해 주세요.")
+        msg = f"경고: {skipped}개 행을 건너뛰었습니다(학번 또는 이름이 비어 있음). 명단을 확인해 주세요."
+        if roster.get("상태표기건너뜀", 0) > 0:
+            msg += " (상태 표기 행 포함)"
+        print(msg)
     short = count_short_names(roster)
     if short > 0:
         print(
@@ -723,7 +985,17 @@ def _cmd_score(args) -> int:
     채점표를 에이전트가 직접 열지 않도록 하기 위한 명령이다 — 학번·이름이 함께
     있는 채점표 원본 대신, 이 CLI가 산출한 토큰↔점수(점수.json)만 에이전트에게
     넘긴다. 톤 등급은 이 산출물의 점수를 교사와 정한 구간표에 적용해 파생한다.
+
+    --column/--grade-column/--sum-columns는 상호 배타다. 다중 헤더 채점표(예:
+    문항별 소제목이 병합된 표)에서 점수 열 후보가 여럿이면(예: 소설 비평하기
+    점수, 시 비평하기 점수, 총점) 조용히 하나를 고르지 않고 exit 1로 멈춘 뒤
+    선택지를 제시한다 — 오선택은 반 전체의 톤 등급을 조용히 틀리게 만든다.
     """
+    given = [args.column, args.grade_column, args.sum_columns]
+    if sum(1 for v in given if v) > 1:
+        print("--column, --grade-column, --sum-columns 중 하나만 지정해 주세요.")
+        return 1
+
     mapping = _read_json(args.mapping)
 
     input_path = Path(args.input)
@@ -735,11 +1007,26 @@ def _cmd_score(args) -> int:
         print("채점표 파일이 비어 있습니다.")
         return 1
 
+    if args.grade_column:
+        return _cmd_score_grade(args, mapping, input_path)
+    if args.sum_columns:
+        return _cmd_score_sum(args, mapping, input_path)
+
     result = parse_score_xlsx(input_path, column=args.column)
     if result is None:
         print("점수 열 헤더를 '점수'로 지정하거나 --column 으로 알려 주세요.")
         return 1
-    pairs, no_score = result
+    if isinstance(result, dict) and result.get("ambiguous"):
+        candidates = result["candidates"]
+        lines = [f"점수 열 후보가 {len(candidates)}개입니다. --column 으로 지정해 주세요."]
+        for c in candidates:
+            lines.append(f"  {c['letter']}열  — {c['label']}")
+        lines.append("예: --column R")
+        print("\n".join(lines))
+        return 1
+
+    pairs, no_score, letter, label = result
+    column_ref = f"{letter} — {label}"
 
     if not pairs and no_score == 0:
         print("점수를 한 건도 읽지 못했습니다. 학번 열과 점수 열이 있는지 확인해 주세요.")
@@ -756,10 +1043,9 @@ def _cmd_score(args) -> int:
 
     _write_json({"items": out_items}, args.out)
 
-    column_label = args.column or "점수"
     if not out_items:
         print(
-            f"점수 수집: 0명(열: '{column_label}'). "
+            f"점수 수집: 0명(열: {column_ref}). "
             f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
         )
         return 0
@@ -773,7 +1059,96 @@ def _cmd_score(args) -> int:
     )
 
     print(
-        f"점수 수집: {len(out_items)}명(열: '{column_label}'). 분포 — {dist_str}. "
+        f"점수 수집: {len(out_items)}명(열: {column_ref}). 분포 — {dist_str}. "
+        f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+    )
+    return 0
+
+
+def _cmd_score_grade(args, mapping, input_path) -> int:
+    """--grade-column: 점수 열이 없는 채점표에서 등급 문자열을 그대로 담는다."""
+    result = parse_grade_xlsx(input_path, args.grade_column)
+    if result is None:
+        print(f"'{args.grade_column}' 열을 찾을 수 없습니다. 열 문자나 헤더 이름을 확인해 주세요.")
+        return 1
+    pairs, no_grade = result
+
+    if not pairs and no_grade == 0:
+        print("등급을 한 건도 읽지 못했습니다. 학번 열과 등급 열이 있는지 확인해 주세요.")
+        return 1
+
+    out_items = []
+    excluded_unmapped = 0
+    for sid, grade in pairs:
+        token = mapping.get("map", {}).get(str(sid))
+        if token is None:
+            excluded_unmapped += 1
+            continue
+        out_items.append({"토큰": token, "등급": grade})
+
+    _write_json({"items": out_items}, args.out)
+
+    if not out_items:
+        print(
+            f"등급 수집: 0명(열: {args.grade_column}). "
+            f"제외: 매핑 없음 {excluded_unmapped}건, 등급 없음 {no_grade}건."
+        )
+        return 0
+
+    dist: dict = {}
+    for item in out_items:
+        dist[item["등급"]] = dist.get(item["등급"], 0) + 1
+    dist_str = ", ".join(f"{g} {c}명" for g, c in sorted(dist.items(), key=lambda kv: -kv[1]))
+
+    print(
+        f"등급 수집: {len(out_items)}명(열: {args.grade_column}). 분포 — {dist_str}. "
+        f"제외: 매핑 없음 {excluded_unmapped}건, 등급 없음 {no_grade}건."
+    )
+    return 0
+
+
+def _cmd_score_sum(args, mapping, input_path) -> int:
+    """--sum-columns: 점수 열이 없는 채점표에서 지정 범위 열을 합산해 점수로 쓴다."""
+    result = parse_sum_columns_xlsx(input_path, args.sum_columns)
+    if result is None:
+        print("합산할 열 범위를 확인해 주세요(예: --sum-columns E:J).")
+        return 1
+    pairs, no_score = result
+
+    if not pairs and no_score == 0:
+        print("점수를 한 건도 읽지 못했습니다. 학번 열과 합산 범위를 확인해 주세요.")
+        return 1
+
+    out_items = []
+    excluded_unmapped = 0
+    for sid, score in pairs:
+        token = mapping.get("map", {}).get(str(sid))
+        if token is None:
+            excluded_unmapped += 1
+            continue
+        out_items.append({"토큰": token, "점수": _to_json_number(score)})
+
+    _write_json({"items": out_items}, args.out)
+
+    range_display = args.sum_columns.strip().upper().replace(" ", "").replace(":", "~") + "열"
+
+    if not out_items:
+        print(
+            f"합산: {range_display}. 점수 수집: 0명. "
+            f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+        )
+        return 0
+
+    dist: dict = {}
+    for item in out_items:
+        dist[item["점수"]] = dist.get(item["점수"], 0) + 1
+    dist_str = ", ".join(
+        f"{_format_score_label(score)}점 {count}명"
+        for score, count in sorted(dist.items(), key=lambda kv: -kv[0])
+    )
+
+    print(
+        f"합산: {range_display}. 점수 수집: {len(out_items)}명. 분포 — {dist_str}. "
         f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
     )
     return 0
@@ -860,7 +1235,17 @@ def main(argv=None) -> int:
     p_score.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_score.add_argument("--out", required=True, help="점수.json 저장 경로")
     p_score.add_argument(
-        "--column", help="점수 열 헤더명(기본: 점수/총점/합계/평가점수 자동 탐지, 공백 무시)"
+        "--column",
+        help="점수 열(엑셀 열 문자 J/R/AA 또는 헤더 이름, 기본: 점수/총점/합계/평가점수 자동 탐지, "
+             "공백 무시). 후보가 여럿이면 이 옵션 없이는 exit 1로 멈추고 선택지를 안내한다",
+    )
+    p_score.add_argument(
+        "--grade-column",
+        help="점수 열이 없는 채점표용 — 지정 열(문자 또는 헤더 이름)의 값을 등급 문자열 그대로 담는다",
+    )
+    p_score.add_argument(
+        "--sum-columns",
+        help="점수 열이 없는 채점표용 — 지정 범위(예: E:J)의 숫자를 합산해 점수로 쓴다",
     )
     p_score.set_defaults(func=_cmd_score)
 

@@ -148,6 +148,33 @@ def test_roster_cli_surname_column_reports_combination_without_values(tmp_path):
     assert saved["students"] == [{"학번": "10104", "이름": "김봄"}]
 
 
+def test_roster_cli_status_word_row_warns_and_excludes(tmp_path):
+    """이름 칸이 '자퇴'인 행은 명렬에서 제외되고, 건너뜀 경고에 상태 표기
+    행이 포함되었음을 알린다. 이름 값('자퇴' 포함)은 출력하지 않는다."""
+    from openpyxl import Workbook
+
+    p = tmp_path / "명단.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "이름"])
+    ws.append(["10101", "김가상"])
+    ws.append(["10102", "이허구"])
+    ws.append(["10114", "자퇴"])
+    wb.save(p)
+
+    out = tmp_path / "명렬.json"
+    proc = run("roster", str(p), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["students"]) == 2
+    assert "명렬 인식: 2명" in proc.stdout
+    assert "건너뛰었습니다" in proc.stdout
+    assert "(상태 표기 행 포함)" in proc.stdout
+    assert "자퇴" not in proc.stdout
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+
+
 def test_roster_cli_zero_detected_fails(tmp_path):
     p = tmp_path / "빈파일.txt"
     p.write_text("아무 명단도 없는 문서입니다.\n", encoding="utf-8")
@@ -799,7 +826,7 @@ def test_score_cli_reports_distribution(tmp_path):
     proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
     assert proc.returncode == 0
     assert "점수 수집: 3명" in proc.stdout
-    assert "열: '점수'" in proc.stdout
+    assert "열: B — 점수" in proc.stdout
     assert "15점 2명" in proc.stdout
     assert "13점 1명" in proc.stdout
     assert_no_pii(proc.stdout)
@@ -859,5 +886,234 @@ def test_score_cli_explicit_column_option(tmp_path):
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert len(saved["items"]) == 1
     assert saved["items"][0]["점수"] == 18
-    assert "열: '수행평가점수'" in proc.stdout
+    assert "열: B — 수행평가점수" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# score — 다중 헤더 + 다중 후보 (FIX 1): 점수 후보가 여럿이면 자동 선택하지
+# 않는다. 실제 채점표(소설 비평하기/시 비평하기 두 활동이 한 표에 있고 각각
+# '점수' 열이 있으며 '총점' 열도 따로 있는 구조)를 재현한다.
+# ---------------------------------------------------------------------------
+
+def _make_multi_header_score_xlsx(tmp_path, student_rows, filename="채점표.xlsx"):
+    """1행 제목 + 2행 라벨(병합 그룹 포함) + 3행 하위 문항의 3중 헤더 채점표.
+
+    열 배치: A=학번, B=이름, C~I=소설 비평하기(문항1~6, 기본점수), J=점수,
+    K~Q=시 비평하기(문항1~6, 기본점수), R=점수, S=총점.
+    """
+    from openpyxl import Workbook
+
+    p = tmp_path / filename
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["2026학년도 2학년 문학 수행평가 채점표"])
+    ws.append([
+        "학번", "이름",
+        "소설 비평하기", "", "", "", "", "", "",
+        "점수",
+        "시 비평하기", "", "", "", "", "", "",
+        "점수",
+        "총점",
+    ])
+    ws.append([
+        "", "",
+        "문항1", "문항2", "문항3", "문항4", "문항5", "문항6", "기본점수",
+        "",
+        "문항1", "문항2", "문항3", "문항4", "문항5", "문항6", "기본점수",
+        "", "",
+    ])
+    for row in student_rows:
+        ws.append(list(row))
+    wb.save(p)
+    return p
+
+
+def _blank_novel_and_poem_scores(sid, novel_score, poem_score, total_score):
+    """소설 항목 6개+기본점수는 비워 두고 소설점수(J)·시점수(R)·총점(S)만 채운다."""
+    return (
+        sid, "",  # 학번, 이름(비움 — 이 테스트는 명렬과 무관)
+        "", "", "", "", "", "", "",  # C~I 소설 문항 원점수(생략)
+        novel_score,  # J
+        "", "", "", "", "", "", "",  # K~Q 시 문항 원점수(생략)
+        poem_score,  # R
+        total_score,  # S
+    )
+
+
+def test_score_cli_multi_header_ambiguous_exits_and_lists_candidates_without_pii(tmp_path):
+    """점수 후보 3개(J열 소설 점수, R열 시 점수, S열 총점)를 조용히 하나 고르지
+    않고 exit 1로 멈춰 선택지(열 문자 + 병합 라벨)를 제시해야 한다. 학생 이름·
+    학번은 절대 stdout에 등장하면 안 된다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102", "10103"])
+
+    p = _make_multi_header_score_xlsx(tmp_path, [
+        _blank_novel_and_poem_scores("10101", 15, 13, 28),
+        _blank_novel_and_poem_scores("10102", 12, 14, 26),
+        _blank_novel_and_poem_scores("10103", 15, 15, 30),
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "점수 열 후보가 3개입니다" in proc.stdout
+    assert "--column" in proc.stdout
+    assert "J열" in proc.stdout
+    assert "소설 비평하기 > 점수" in proc.stdout
+    assert "R열" in proc.stdout
+    assert "시 비평하기 > 점수" in proc.stdout
+    assert "S열" in proc.stdout
+    assert "총점" in proc.stdout
+    # 핵심 계약: 후보 목록을 보여주는 중에도 학생 이름·학번은 절대 노출되지 않는다.
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+
+
+def test_score_cli_column_letter_selects_candidate(tmp_path):
+    """--column R(엑셀 열 문자)로 지정하면 헤더 탐지를 건너뛰고 그 열을 바로 쓴다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102", "10103"])
+
+    p = _make_multi_header_score_xlsx(tmp_path, [
+        _blank_novel_and_poem_scores("10101", 15, 13, 28),
+        _blank_novel_and_poem_scores("10102", 12, 14, 26),
+        _blank_novel_and_poem_scores("10103", 15, 15, 30),
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run(
+        "score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path),
+        "--out", str(out), "--column", "R",
+    )
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    by_token = {item["토큰"]: item["점수"] for item in saved["items"]}
+    assert by_token[mapping["map"]["10101"]] == 13
+    assert by_token[mapping["map"]["10102"]] == 14
+    assert by_token[mapping["map"]["10103"]] == 15
+    assert "열: R — 시 비평하기 > 점수" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_score_cli_column_header_name_총점_selects_candidate(tmp_path):
+    """--column 총점(헤더 이름)으로 지정해도 정상 동작한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102", "10103"])
+
+    p = _make_multi_header_score_xlsx(tmp_path, [
+        _blank_novel_and_poem_scores("10101", 15, 13, 28),
+        _blank_novel_and_poem_scores("10102", 12, 14, 26),
+        _blank_novel_and_poem_scores("10103", 15, 15, 30),
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run(
+        "score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path),
+        "--out", str(out), "--column", "총점",
+    )
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    by_token = {item["토큰"]: item["점수"] for item in saved["items"]}
+    assert by_token[mapping["map"]["10101"]] == 28
+    assert by_token[mapping["map"]["10102"]] == 26
+    assert by_token[mapping["map"]["10103"]] == 30
+    assert "열: S — 총점" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_score_cli_single_candidate_still_auto_proceeds(tmp_path):
+    """회귀: 점수 열 후보가 1개뿐이면(기존 단일 헤더 채점표) --column 없이도
+    지금까지처럼 자동으로 진행한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = _make_score_xlsx(tmp_path, [("10101", "17")])
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved["items"][0]["점수"] == 17
+    assert "열: B — 점수" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# score --grade-column / --sum-columns (FIX 2): 점수 열이 아예 없는 채점표
+# ---------------------------------------------------------------------------
+
+def test_score_cli_grade_column_collects_grades_and_distribution(tmp_path):
+    """--grade-column: 점수 대신 등급 문자열을 그대로 담고, 분포는 등급별로 집계한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102", "10103"])
+
+    p = _make_score_xlsx(tmp_path, [
+        ("10101", "상"),
+        ("10102", "중"),
+        ("10103", "상"),
+    ], header=("학번", "등급"))
+
+    out = tmp_path / "점수.json"
+    proc = run(
+        "score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path),
+        "--out", str(out), "--grade-column", "등급",
+    )
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    by_token = {item["토큰"]: item["등급"] for item in saved["items"]}
+    assert by_token[mapping["map"]["10101"]] == "상"
+    assert by_token[mapping["map"]["10102"]] == "중"
+    assert by_token[mapping["map"]["10103"]] == "상"
+    assert "등급 수집: 3명" in proc.stdout
+    assert "상 2명" in proc.stdout
+    assert "중 1명" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_score_cli_sum_columns_sums_range(tmp_path):
+    """--sum-columns E:J: 지정 범위의 숫자를 합산해 점수로 쓴다."""
+    from openpyxl import Workbook
+
+    p = tmp_path / "채점표.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "이름", "비고", "비고2", "문항1", "문항2", "문항3", "문항4", "문항5", "기본점수"])
+    ws.append(["10101", "", "", "", 3, 3, 3, 3, 3, 5])   # E~J 합 20
+    ws.append(["10102", "", "", "", 2, 2, 2, 2, 2, 5])   # E~J 합 15
+    wb.save(p)
+
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    out = tmp_path / "점수.json"
+    proc = run(
+        "score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path),
+        "--out", str(out), "--sum-columns", "E:J",
+    )
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    by_token = {item["토큰"]: item["점수"] for item in saved["items"]}
+    assert by_token[mapping["map"]["10101"]] == 20
+    assert by_token[mapping["map"]["10102"]] == 15
+    assert "합산: E~J열" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_score_cli_mutually_exclusive_options_fail(tmp_path):
+    """--column/--grade-column/--sum-columns 중 2개 이상 지정하면 exit 1."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = _make_score_xlsx(tmp_path, [("10101", "17")])
+
+    out = tmp_path / "점수.json"
+    proc = run(
+        "score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path),
+        "--out", str(out), "--column", "점수", "--grade-column", "등급",
+    )
+    assert proc.returncode == 1
+    assert not out.exists()
     assert_no_pii(proc.stdout)

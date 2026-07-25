@@ -203,6 +203,41 @@ def test_detect_roster_no_surname_column_no_combine_flag(tmp_path):
     assert not roster.get("성이름결합")
 
 
+# ---------------------------------------------------------------------------
+# 상태 표기 행 제외 (FIX 3) — 실제 채점표에서 학번은 살아 있는데 이름 칸에
+# '자퇴' 같은 상태 문구가 적힌 행을 학생으로 잘못 인식해 48명이 49명으로
+# 집계된 버그가 있었다. 이런 행은 명렬에서 제외되고 건너뜀에 반영되어야 한다.
+# ---------------------------------------------------------------------------
+
+def test_detect_roster_excludes_status_word_row(tmp_path):
+    """이름 칸이 '자퇴'인 행은 학생으로 잡지 않고 건너뜀에 반영한다."""
+    path = _make_xlsx(
+        tmp_path,
+        [("10101", "김가상"), ("10102", "이허구"), ("10114", "자퇴")],
+    )
+    roster = detect_roster(path)
+    assert len(roster["students"]) == 2
+    assert {s["학번"] for s in roster["students"]} == {"10101", "10102"}
+    assert roster["건너뜀"] == 1
+    assert roster.get("상태표기건너뜀") == 1
+
+
+def test_detect_roster_status_word_ignores_surrounding_whitespace(tmp_path):
+    """상태 표기어 비교는 공백을 제거한 뒤 완전 일치로 판정한다."""
+    path = _make_xlsx(tmp_path, [("10101", "김가상"), ("10102", " 자퇴 ")])
+    roster = detect_roster(path)
+    assert len(roster["students"]) == 1
+    assert roster["건너뜀"] == 1
+    assert roster.get("상태표기건너뜀") == 1
+
+
+def test_detect_roster_no_status_words_zero_count(tmp_path):
+    """상태 표기 행이 없으면 상태표기건너뜀은 0이어야 한다(키는 항상 존재)."""
+    path = _make_xlsx(tmp_path, [("10101", "김가상"), ("10102", "이허구")])
+    roster = detect_roster(path)
+    assert roster.get("상태표기건너뜀") == 0
+
+
 from pseudonymize import issue_tokens, pseudonymize_text, reidentify, SHORT_NAME_WARNING
 
 ROSTER = {"students": [
