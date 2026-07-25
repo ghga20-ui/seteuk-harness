@@ -88,16 +88,25 @@ def _cell_text(c) -> str:
     return str(c).strip()
 
 
-def _rows_from_xlsx(path):
+def _sheets_from_xlsx(path):
+    """워크북의 시트를 (시트명, 행 목록) 쌍의 목록으로 반환한다. 시트를 이어붙이지 않는다.
+
+    이전 구현(_rows_from_xlsx)은 전 시트를 한 리스트로 이어붙였다 — 그래서 반별로
+    나뉜 채점표가 한 반으로 합쳐지고, 시트1의 헤더 열 인덱스로 시트2의 데이터를
+    읽어(열 인덱스는 시트마다 다르다) 엉뚱한 값을 가져오는 사고가 났다(실측 341개
+    중 19~29개 파일, 최악 사례는 라벨-데이터 불일치 87/117쌍=74.4%). 호출부가
+    시트별로 처리한 뒤 합칠지·멈출지 스스로 판단해야 하므로 시트 경계를 보존해
+    반환한다.
+    """
     from openpyxl import load_workbook
 
     wb = load_workbook(path, read_only=True, data_only=True)
-    rows = []
+    sheets = []
     for ws in wb.worksheets:
-        for row in ws.iter_rows(values_only=True):
-            rows.append([_cell_text(c) for c in row])
+        rows = [[_cell_text(c) for c in row] for row in ws.iter_rows(values_only=True)]
+        sheets.append((ws.title, rows))
     wb.close()
-    return rows
+    return sheets
 
 
 def _rows_from_text(path):
@@ -255,63 +264,200 @@ def _confirm_reasons(students, skipped, duplicate, id_label) -> list[str]:
     return reasons
 
 
-def detect_roster(path) -> dict:
-    """명단 파일에서 학번·이름 쌍을 감지한다. LLM을 거치지 않는 로컬 판정."""
-    path = Path(path)
-    읽기오류 = ""
-    if _looks_like_legacy_xls(path):
-        # 텍스트 경로로 보내면 OLE2 바이너리가 깨진 문자열로 읽혀 예외 없이 0명이 된다.
-        rows = []
-        읽기오류 = "구형 .xls 형식은 읽을 수 없습니다. 엑셀에서 .xlsx로 다시 저장해 주세요."
-    else:
-        try:
-            rows = _rows_from_xlsx(path) if path.suffix.lower() == ".xlsx" else _rows_from_text(path)
-        except Exception as exc:
-            # 사유를 버리면 손상 파일·형식 미지원·학생 없음이 전부 "0명"으로 똑같이 보인다.
-            rows = []
-            읽기오류 = f"{type(exc).__name__}: {exc}"
+def _detect_from_rows(rows) -> dict:
+    """단일 행 집합(시트 하나 또는 텍스트 파일 전체)에서 명렬을 추출한다.
 
+    detect_roster의 옛 단일-표 로직을 시트별로 재사용할 수 있게 뽑아낸 것이다.
+    반환 키: students, header_found(헤더 경로 사용 여부), 건너뜀, 상태표기건너뜀,
+    중복, 성이름결합, id_label.
+    """
     id_idx, name_idx, surname_idx, header_row_idx = _find_header_indices(rows)
-
     if id_idx is not None and name_idx is not None:
-        # 헤더 기반 추출
         students, skipped, status_skipped, duplicate = _pairs_from_rows_with_indices(
             rows, id_idx, name_idx, header_row_idx, surname_idx
         )
-        if not students:
-            방식 = "실패"
-        else:
-            방식 = "표헤더"
         id_label = ""
         if 0 <= header_row_idx < len(rows) and id_idx < len(rows[header_row_idx]):
             id_label = rows[header_row_idx][id_idx]
-        확인사유 = _confirm_reasons(students, skipped, duplicate, id_label)
-        result = {
-            "students": students, "출처": str(path), "방식": 방식,
-            "확인필요": bool(확인사유), "확인사유": 확인사유,
+        return {
+            "students": students, "header_found": True,
             "건너뜀": skipped, "상태표기건너뜀": status_skipped, "중복": duplicate,
+            "성이름결합": surname_idx is not None, "id_label": id_label,
         }
-        if 읽기오류:
-            result["읽기오류"] = 읽기오류
-        if surname_idx is not None:
-            result["성이름결합"] = True
-        return result
+    students = _pairs_from_rows_pattern(rows)
+    return {
+        "students": students, "header_found": False,
+        "건너뜀": 0, "상태표기건너뜀": 0, "중복": 0,
+        "성이름결합": False, "id_label": "",
+    }
+
+
+_SHEET_REPEAT_OVERLAP_RATIO = 0.8  # 교집합/작은쪽 크기 >= 이 값이면 "같은 명렬 반복"
+
+
+def _merge_sheet_rosters(named_results: list) -> dict:
+    """시트별 명렬 추출 결과를 학번 집합 비교로 병합할지·하나만 쓸지 판단한다.
+
+    named_results: [(시트명, _detect_from_rows 반환값), ...] — 학생이 1명 이상
+    잡힌(=데이터) 시트만 담겨 있어야 한다.
+
+    실측(다중 데이터시트 17개)에서 9개는 시트 간 학번 교집합이 0이었다(선택과목을
+    반별로 나눈 표) — 이 경우 시트 하나만 고르면 14~137명을 잃으므로 합집합이
+    정답이다. 반대로 교집합이 큰 경우는 같은 명렬이 반복 등재된 것이므로 가장 큰
+    시트만 쓴다. 그 사이는 확인을 요구하며 합집합을 쓴다.
+
+    반환 키: students, extra_reasons(list[str]), sheet_names(합쳤으면 시트명 목록,
+    아니면 None), 건너뜀, 상태표기건너뜀, 중복, header_found, 성이름결합, id_label.
+    """
+    if len(named_results) == 1:
+        name, r = named_results[0]
+        return {
+            "students": r["students"], "extra_reasons": [], "sheet_names": None,
+            "건너뜀": r["건너뜀"], "상태표기건너뜀": r["상태표기건너뜀"], "중복": r["중복"],
+            "header_found": r["header_found"], "성이름결합": r["성이름결합"],
+            "id_label": r["id_label"],
+        }
+
+    def ids_of(r):
+        return {str(s.get("학번", "")) for s in r["students"]}
+
+    ordered = sorted(named_results, key=lambda nr: len(nr[1]["students"]), reverse=True)
+    primary_name, primary = ordered[0]
+    primary_ids = ids_of(primary)
+
+    all_disjoint = True
+    all_repeat = True
+    total_overlap = 0
+    for _, r in ordered[1:]:
+        ids = ids_of(r)
+        inter = primary_ids & ids
+        total_overlap += len(inter)
+        if inter:
+            all_disjoint = False
+        smaller = min(len(primary_ids), len(ids)) or 1
+        if len(inter) / smaller < _SHEET_REPEAT_OVERLAP_RATIO:
+            all_repeat = False
+
+    def _union(order):
+        merged, seen = [], set()
+        skipped = status_skipped = duplicate = 0
+        for _, r in order:
+            skipped += r["건너뜀"]
+            status_skipped += r["상태표기건너뜀"]
+            duplicate += r["중복"]
+            for s in r["students"]:
+                sid = str(s.get("학번", ""))
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                merged.append(s)
+        return merged, skipped, status_skipped, duplicate
+
+    sheet_names = [name for name, _ in named_results]
+    성이름결합 = any(r["성이름결합"] for _, r in named_results)
+
+    if all_disjoint:
+        merged, skipped, status_skipped, duplicate = _union([(primary_name, primary)] + ordered[1:])
+        return {
+            "students": merged, "extra_reasons": [], "sheet_names": sheet_names,
+            "건너뜀": skipped, "상태표기건너뜀": status_skipped, "중복": duplicate,
+            "header_found": primary["header_found"], "성이름결합": 성이름결합,
+            "id_label": primary["id_label"],
+        }
+
+    if all_repeat:
+        reason = [
+            f"{len(named_results)}개 시트에 같은 명렬이 반복돼 가장 큰 시트만 사용했습니다."
+        ]
+        return {
+            "students": primary["students"], "extra_reasons": reason, "sheet_names": None,
+            "건너뜀": primary["건너뜀"], "상태표기건너뜀": primary["상태표기건너뜀"],
+            "중복": primary["중복"], "header_found": primary["header_found"],
+            "성이름결합": primary["성이름결합"], "id_label": primary["id_label"],
+        }
+
+    # 부분 겹침 — 합집합을 쓰되 확인을 요구한다.
+    merged, skipped, status_skipped, duplicate = _union([(primary_name, primary)] + ordered[1:])
+    reason = [f"시트 간 학번이 {total_overlap}건 겹쳐 합집합으로 처리했습니다. 확인해 주세요."]
+    return {
+        "students": merged, "extra_reasons": reason, "sheet_names": sheet_names,
+        "건너뜀": skipped, "상태표기건너뜀": status_skipped, "중복": duplicate,
+        "header_found": primary["header_found"], "성이름결합": 성이름결합,
+        "id_label": primary["id_label"],
+    }
+
+
+def detect_roster(path) -> dict:
+    """명단 파일에서 학번·이름 쌍을 감지한다. LLM을 거치지 않는 로컬 판정.
+
+    엑셀은 시트를 이어붙이지 않고 시트별로 추출한 뒤 학번 집합을 비교해 합칠지
+    (교집합 0), 하나만 쓸지(교집합 커서 반복 등재로 판단), 확인을 요구하며 합칠지
+    (부분 겹침)를 결정한다(_merge_sheet_rosters). 데이터가 잡힌 시트가 1개면
+    회귀 없이 기존과 동일하게 동작한다.
+    """
+    path = Path(path)
+    읽기오류 = ""
+    sheets: list = []
+    if _looks_like_legacy_xls(path):
+        # 텍스트 경로로 보내면 OLE2 바이너리가 깨진 문자열로 읽혀 예외 없이 0명이 된다.
+        읽기오류 = "구형 .xls 형식은 읽을 수 없습니다. 엑셀에서 .xlsx로 다시 저장해 주세요."
     else:
-        # 헤더가 없으므로 패턴 기반 추출 (낮은 신뢰도)
-        students = _pairs_from_rows_pattern(rows)
-        if not students:
-            방식 = "실패"
+        try:
+            if path.suffix.lower() == ".xlsx":
+                sheets = _sheets_from_xlsx(path)
+            else:
+                sheets = [("", _rows_from_text(path))]
+        except Exception as exc:
+            # 사유를 버리면 손상 파일·형식 미지원·학생 없음이 전부 "0명"으로 똑같이 보인다.
+            sheets = []
+            읽기오류 = f"{type(exc).__name__}: {exc}"
+
+    per_sheet = [(name, _detect_from_rows(rows)) for name, rows in sheets]
+    data_sheets = [(name, r) for name, r in per_sheet if r["students"]]
+
+    if data_sheets:
+        merged = _merge_sheet_rosters(data_sheets)
+        students = merged["students"]
+        skipped = merged["건너뜀"]
+        status_skipped = merged["상태표기건너뜀"]
+        duplicate = merged["중복"]
+        성이름결합 = merged["성이름결합"]
+        시트합침 = merged["sheet_names"]
+        if merged["header_found"]:
+            방식 = "표헤더"
+            확인사유 = list(merged["extra_reasons"]) + _confirm_reasons(
+                students, skipped, duplicate, merged["id_label"]
+            )
         else:
             방식 = "패턴"
-        result = {
-            "students": students, "출처": str(path), "방식": 방식,
-            "확인필요": True,
-            "확인사유": ["표 헤더를 찾지 못해 패턴으로 추정했습니다."],
-            "건너뜀": 0, "중복": 0,
-        }
-        if 읽기오류:
-            result["읽기오류"] = 읽기오류
-        return result
+            확인사유 = ["표 헤더를 찾지 못해 패턴으로 추정했습니다."] + list(merged["extra_reasons"])
+    else:
+        students = []
+        시트합침 = None
+        성이름결합 = False
+        skipped = sum(r["건너뜀"] for _, r in per_sheet)
+        status_skipped = sum(r["상태표기건너뜀"] for _, r in per_sheet)
+        duplicate = sum(r["중복"] for _, r in per_sheet)
+        방식 = "실패"
+        header_found_any = any(r["header_found"] for _, r in per_sheet)
+        if header_found_any:
+            id_label = next((r["id_label"] for _, r in per_sheet if r["header_found"]), "")
+            확인사유 = _confirm_reasons(students, skipped, duplicate, id_label)
+        else:
+            확인사유 = ["표 헤더를 찾지 못해 패턴으로 추정했습니다."]
+
+    result = {
+        "students": students, "출처": str(path), "방식": 방식,
+        "확인필요": bool(확인사유), "확인사유": 확인사유,
+        "건너뜀": skipped, "상태표기건너뜀": status_skipped, "중복": duplicate,
+    }
+    if 읽기오류:
+        result["읽기오류"] = 읽기오류
+    if 성이름결합:
+        result["성이름결합"] = True
+    if 시트합침:
+        result["시트합침"] = 시트합침
+    return result
 
 
 def issue_tokens(roster: dict, submitted_ids, existing: dict | None = None) -> dict:
@@ -556,13 +702,44 @@ def _find_memo_header_indices(rows):
     return (None, None, -1)
 
 
-def parse_memo_xlsx(path):
-    """관찰 메모 xlsx에서 (학번, 메모) 쌍을 추출한다.
+def _pick_data_sheet(sheets, has_data, sheet=None):
+    """시트 목록에서 처리할 시트 하나를 고른다.
 
-    메모 열 헤더('관찰 메모'/'관찰메모'/'메모'/'특기사항' 중 하나, 공백 무시)를
-    찾지 못하면 None을 반환한다(호출부가 exit 1 + 안내로 처리).
+    명렬(detect_roster)과 달리 점수·등급·메모는 학번을 키로 학생별 값을 읽는
+    작업이고 열 인덱스가 시트마다 다르므로, 시트를 넘나들며 인덱스를 재사용하면
+    엉뚱한 열의 값을 가져온다. 그래서 여기서는 합치지 않고 fail-closed로 멈춘다
+    — 기존 점수 열 다중 후보 처리와 같은 방식이다.
+
+    sheets: [(시트명, rows), ...]
+    has_data(rows) -> bool: 이 시트가 처리 대상 데이터를 담고 있는지 판정.
+    sheet: 교사가 --sheet로 지정한 시트명(있으면 존재 여부만 확인하고 그 시트를 쓴다).
+
+    반환: (종류, payload)
+    - ("ok", rows): 처리할 시트 하나가 정해짐
+    - ("invalid_sheet", [시트명, ...]): --sheet로 지정한 이름이 없음
+    - ("ambiguous", [시트명, ...]): --sheet 없이 데이터가 있는 시트가 2개 이상
+    - ("none", None): 데이터가 있는 시트가 하나도 없음
     """
-    rows = _rows_from_xlsx(path)
+    if sheet is not None:
+        match = next((rows for name, rows in sheets if name == sheet), None)
+        if match is None:
+            return ("invalid_sheet", [name for name, _ in sheets])
+        return ("ok", match)
+
+    data_sheets = [(name, rows) for name, rows in sheets if has_data(rows)]
+    if not data_sheets:
+        return ("none", None)
+    if len(data_sheets) == 1:
+        return ("ok", data_sheets[0][1])
+    return ("ambiguous", [name for name, _ in data_sheets])
+
+
+def _memo_has_data(rows) -> bool:
+    id_idx, memo_idx, _ = _find_memo_header_indices(rows)
+    return id_idx is not None and memo_idx is not None
+
+
+def _parse_memo_from_rows(rows):
     id_idx, memo_idx, header_row_idx = _find_memo_header_indices(rows)
     if id_idx is None or memo_idx is None:
         return None
@@ -581,6 +758,29 @@ def parse_memo_xlsx(path):
             continue
         pairs.append((sid, memo))
     return pairs
+
+
+def parse_memo_xlsx(path, sheet=None):
+    """관찰 메모 xlsx에서 (학번, 메모) 쌍을 추출한다. 시트별로 독립 처리한다 —
+    열 인덱스는 시트마다 다르므로 시트를 넘나들며 재사용하지 않는다.
+
+    반환:
+    - None: 메모 열 헤더('관찰 메모'/'관찰메모'/'메모'/'특기사항' 중 하나, 공백
+      무시)를 찾지 못함(호출부가 exit 1 + 안내로 처리)
+    - {"invalid_sheet": True, "sheets": [...]}: --sheet로 지정한 시트가 없음
+    - {"sheet_ambiguous": True, "sheets": [...]}: --sheet 없이 데이터가 있는
+      시트가 2개 이상이라 자동 선택을 거부해야 하는 경우
+    - [(학번, 메모), ...]: 정상
+    """
+    sheets = _sheets_from_xlsx(path)
+    kind, payload = _pick_data_sheet(sheets, _memo_has_data, sheet=sheet)
+    if kind == "invalid_sheet":
+        return {"invalid_sheet": True, "sheets": payload}
+    if kind == "ambiguous":
+        return {"sheet_ambiguous": True, "sheets": payload}
+    if kind == "none":
+        return None
+    return _parse_memo_from_rows(payload)
 
 
 _MEMO_LINE = re.compile(r"^(\d+)\s*[:]?\s*(.*)$")
@@ -790,24 +990,12 @@ def _parse_number(cell):
         return None
 
 
-def parse_score_xlsx(path, column=None):
-    """채점표 xlsx에서 점수 열을 찾아 (학번, 점수) 쌍을 추출한다.
+def _score_has_data(rows, column) -> bool:
+    resolution = _resolve_score_column(rows, column=column)
+    return resolution["status"] not in ("no_id", "not_found")
 
-    다중 헤더(제목 행 + 병합 구간 행 + 하위 문항 행)에서 점수 열 후보가 여럿
-    이면(예: 소설 비평하기 점수, 시 비평하기 점수, 총점) 조용히 하나를 고르지
-    않는다 — 반 전체의 톤 등급이 엉뚱한 열에서 파생되는 사고를 막기 위해서다.
 
-    반환:
-    - None: 학번 열이 없거나, 점수 열 후보가 하나도 없거나, --column으로 지정한
-      열을 찾지 못한 경우(호출부가 exit 1 + 안내로 처리)
-    - {"ambiguous": True, "candidates": [...]}: --column 없이 점수 열 후보가
-      2개 이상이라 자동 선택을 거부해야 하는 경우
-    - (pairs, no_score, letter, label): 정상 — pairs는 (학번, 점수) 리스트,
-      no_score는 학번은 있으나 점수가 비었거나 숫자가 아니어서 건너뛴 행 수,
-      letter/label은 실제로 사용한 열의 표시용 정보(엑셀 열 문자, 병합 라벨
-      결합 이름)다.
-    """
-    rows = _rows_from_xlsx(path)
+def _parse_score_from_rows(rows, column):
     resolution = _resolve_score_column(rows, column=column)
 
     if resolution["status"] in ("no_id", "not_found"):
@@ -837,14 +1025,50 @@ def parse_score_xlsx(path, column=None):
     return pairs, no_score, resolution["letter"], resolution["label"]
 
 
-def parse_grade_xlsx(path, column):
-    """채점표 xlsx에서 등급 열의 값을 점수 대신 그대로 가져온다((학번, 등급) 쌍).
+def parse_score_xlsx(path, column=None, sheet=None):
+    """채점표 xlsx에서 점수 열을 찾아 (학번, 점수) 쌍을 추출한다. 시트별로
+    독립 처리한다 — 열 인덱스는 시트마다 다르므로 시트를 넘나들며 인덱스를
+    재사용하지 않는다(재사용하면 시트1의 헤더 인덱스로 시트2의 엉뚱한 열 값을
+    점수로 읽는 사고가 난다).
 
-    점수 열이 아예 없는 채점표(A/B/C, 상/중/하 등 등급만 있는 경우)를 위한
-    경로다. column은 열 문자 또는 헤더 이름 중 하나다. 반환은 (pairs,
-    no_grade_count) — 못 찾으면 None.
+    다중 헤더(제목 행 + 병합 구간 행 + 하위 문항 행)에서 점수 열 후보가 여럿
+    이면(예: 소설 비평하기 점수, 시 비평하기 점수, 총점) 조용히 하나를 고르지
+    않는다 — 반 전체의 톤 등급이 엉뚱한 열에서 파생되는 사고를 막기 위해서다.
+    데이터가 있는 시트가 여럿이어도 마찬가지로 조용히 합치지 않고 멈춘다
+    (명렬과 달리 점수는 학번 키로 매칭되므로 시트별 처리 후 학번 기준 병합이
+    가능하지만, 그건 교사가 --sheet 없이 합치기를 선택했을 때의 이야기가
+    아니라 fail-closed가 기본이다).
+
+    반환:
+    - None: 학번 열이 없거나, 점수 열 후보가 하나도 없거나, --column으로 지정한
+      열을 찾지 못한 경우(호출부가 exit 1 + 안내로 처리)
+    - {"invalid_sheet": True, "sheets": [...]}: --sheet로 지정한 시트가 없음
+    - {"sheet_ambiguous": True, "sheets": [...]}: --sheet 없이 데이터가 있는
+      시트가 2개 이상
+    - {"ambiguous": True, "candidates": [...]}: --column 없이 (선택된 시트 안에서)
+      점수 열 후보가 2개 이상이라 자동 선택을 거부해야 하는 경우
+    - (pairs, no_score, letter, label): 정상 — pairs는 (학번, 점수) 리스트,
+      no_score는 학번은 있으나 점수가 비었거나 숫자가 아니어서 건너뛴 행 수,
+      letter/label은 실제로 사용한 열의 표시용 정보(엑셀 열 문자, 병합 라벨
+      결합 이름)다.
     """
-    rows = _rows_from_xlsx(path)
+    sheets = _sheets_from_xlsx(path)
+    kind, payload = _pick_data_sheet(sheets, lambda rows: _score_has_data(rows, column), sheet=sheet)
+    if kind == "invalid_sheet":
+        return {"invalid_sheet": True, "sheets": payload}
+    if kind == "ambiguous":
+        return {"sheet_ambiguous": True, "sheets": payload}
+    if kind == "none":
+        return None
+    return _parse_score_from_rows(payload, column)
+
+
+def _grade_has_data(rows, column) -> bool:
+    id_idx, _, col_idx = _resolve_named_column(rows, column)
+    return id_idx is not None and col_idx is not None
+
+
+def _parse_grade_from_rows(rows, column):
     id_idx, header_row_idx, col_idx = _resolve_named_column(rows, column)
     if id_idx is None or col_idx is None:
         return None
@@ -867,20 +1091,34 @@ def parse_grade_xlsx(path, column):
     return pairs, no_grade
 
 
-def parse_sum_columns_xlsx(path, column_range):
-    """채점표 xlsx에서 지정 범위(예: 'E:J') 열의 숫자를 합산해 점수로 쓴다.
+def parse_grade_xlsx(path, column, sheet=None):
+    """채점표 xlsx에서 등급 열의 값을 점수 대신 그대로 가져온다((학번, 등급) 쌍).
+    시트별로 독립 처리한다(열 인덱스를 시트 간에 재사용하지 않는다).
 
-    점수 열이 따로 없고 문항별 점수만 있는 채점표를 위한 경로다. 범위 내
-    비었거나 숫자가 아닌 셀은 0으로 취급하지 않고 그냥 건너뛰며(부분 합산),
-    범위 전체가 비었으면 그 행은 no_score로 집계한다. 반환은 (pairs,
-    no_score_count) — 학번 열을 못 찾거나 범위 형식이 잘못되면 None.
+    점수 열이 아예 없는 채점표(A/B/C, 상/중/하 등 등급만 있는 경우)를 위한
+    경로다. column은 열 문자 또는 헤더 이름 중 하나다. 반환은 (pairs,
+    no_grade_count) — 못 찾으면 None. 데이터가 있는 시트가 여럿이면 --sheet
+    없이는 {"sheet_ambiguous": True, "sheets": [...]}로 멈춘다.
     """
-    rows = _rows_from_xlsx(path)
+    sheets = _sheets_from_xlsx(path)
+    kind, payload = _pick_data_sheet(sheets, lambda rows: _grade_has_data(rows, column), sheet=sheet)
+    if kind == "invalid_sheet":
+        return {"invalid_sheet": True, "sheets": payload}
+    if kind == "ambiguous":
+        return {"sheet_ambiguous": True, "sheets": payload}
+    if kind == "none":
+        return None
+    return _parse_grade_from_rows(payload, column)
+
+
+def _sum_has_data(rows) -> bool:
+    id_idx, _ = _find_label_row(rows)
+    return id_idx is not None
+
+
+def _parse_sum_from_rows(rows, bounds):
     id_idx, header_row_idx = _find_label_row(rows)
     if id_idx is None:
-        return None
-    bounds = _parse_column_range(column_range)
-    if bounds is None:
         return None
     start, end = bounds
 
@@ -908,10 +1146,36 @@ def parse_sum_columns_xlsx(path, column_range):
     return pairs, no_score
 
 
+def parse_sum_columns_xlsx(path, column_range, sheet=None):
+    """채점표 xlsx에서 지정 범위(예: 'E:J') 열의 숫자를 합산해 점수로 쓴다.
+    시트별로 독립 처리한다(열 인덱스를 시트 간에 재사용하지 않는다).
+
+    점수 열이 따로 없고 문항별 점수만 있는 채점표를 위한 경로다. 범위 내
+    비었거나 숫자가 아닌 셀은 0으로 취급하지 않고 그냥 건너뛰며(부분 합산),
+    범위 전체가 비었으면 그 행은 no_score로 집계한다. 반환은 (pairs,
+    no_score_count) — 학번 열을 못 찾거나 범위 형식이 잘못되면 None. 데이터가
+    있는 시트가 여럿이면 --sheet 없이는 {"sheet_ambiguous": True, "sheets": [...]}
+    로 멈춘다.
+    """
+    bounds = _parse_column_range(column_range)
+    if bounds is None:
+        return None
+    sheets = _sheets_from_xlsx(path)
+    kind, payload = _pick_data_sheet(sheets, _sum_has_data, sheet=sheet)
+    if kind == "invalid_sheet":
+        return {"invalid_sheet": True, "sheets": payload}
+    if kind == "ambiguous":
+        return {"sheet_ambiguous": True, "sheets": payload}
+    if kind == "none":
+        return None
+    return _parse_sum_from_rows(payload, bounds)
+
+
 def _xlsx_is_empty(path) -> bool:
-    """워크북에 실제 내용(비공백 셀)이 하나도 없는지 확인한다."""
-    rows = _rows_from_xlsx(path)
-    return not any(any(c.strip() for c in row) for row in rows)
+    """워크북에 실제 내용(비공백 셀)이 하나도 없는지 확인한다. 시트 중 하나라도
+    내용이 있으면 비어있지 않은 것으로 판정한다."""
+    sheets = _sheets_from_xlsx(path)
+    return not any(any(c.strip() for c in row) for _, rows in sheets for row in rows)
 
 
 MAPPING_GLOB = "매핑*.json"
@@ -1004,6 +1268,9 @@ def _cmd_roster(args) -> int:
         return 1
     _write_json(roster, args.out)
     print(f"명렬 인식: {n}명 (방식: {roster.get('방식', '?')}). 이름은 출력하지 않습니다.")
+    시트합침 = roster.get("시트합침")
+    if 시트합침:
+        print(f"{len(시트합침)}개 시트를 합쳐 {n}명 인식했습니다.")
     if roster.get("성이름결합"):
         print("성 열과 이름 열을 합쳐 전체 이름으로 사용합니다.")
     duplicate = roster.get("중복", 0)
@@ -1101,6 +1368,24 @@ def _cmd_mask(args) -> int:
     return 0
 
 
+def _sheet_error_message(result):
+    """parse_memo_xlsx/parse_score_xlsx 등의 시트 선택 오류 반환값을 안내 문구로
+    바꾼다. 시트 관련 오류가 아니면 None(호출부가 기존 처리를 계속하게 한다)."""
+    if not isinstance(result, dict):
+        return None
+    if result.get("invalid_sheet"):
+        lines = ["지정한 시트를 찾을 수 없습니다. 유효한 시트명:"]
+        lines.extend(f"  {name}" for name in result["sheets"])
+        return "\n".join(lines)
+    if result.get("sheet_ambiguous"):
+        names = result["sheets"]
+        lines = [f"데이터가 있는 시트가 {len(names)}개입니다. --sheet 로 지정해 주세요."]
+        lines.extend(f"  {name}" for name in names)
+        lines.append(f"예: --sheet {names[0]}")
+        return "\n".join(lines)
+    return None
+
+
 def _cmd_memo(args) -> int:
     """교사 관찰 메모(파일)를 토큰화한다.
 
@@ -1122,7 +1407,11 @@ def _cmd_memo(args) -> int:
         if _xlsx_is_empty(input_path):
             print("메모 파일이 비어 있습니다.")
             return 1
-        pairs = parse_memo_xlsx(input_path)
+        pairs = parse_memo_xlsx(input_path, sheet=args.sheet)
+        sheet_error = _sheet_error_message(pairs)
+        if sheet_error is not None:
+            print(sheet_error)
+            return 1
         if pairs is None:
             print("메모 열 헤더를 '관찰 메모'로 지정해 주세요")
             return 1
@@ -1223,7 +1512,11 @@ def _cmd_score(args) -> int:
     if args.sum_columns:
         return _cmd_score_sum(args, mapping, input_path)
 
-    result = parse_score_xlsx(input_path, column=args.column)
+    result = parse_score_xlsx(input_path, column=args.column, sheet=args.sheet)
+    sheet_error = _sheet_error_message(result)
+    if sheet_error is not None:
+        print(sheet_error)
+        return 1
     if result is None:
         print("점수 열 헤더를 '점수'로 지정하거나 --column 으로 알려 주세요.")
         return 1
@@ -1278,7 +1571,11 @@ def _cmd_score(args) -> int:
 
 def _cmd_score_grade(args, mapping, input_path) -> int:
     """--grade-column: 점수 열이 없는 채점표에서 등급 문자열을 그대로 담는다."""
-    result = parse_grade_xlsx(input_path, args.grade_column)
+    result = parse_grade_xlsx(input_path, args.grade_column, sheet=args.sheet)
+    sheet_error = _sheet_error_message(result)
+    if sheet_error is not None:
+        print(sheet_error)
+        return 1
     if result is None:
         print(f"'{args.grade_column}' 열을 찾을 수 없습니다. 열 문자나 헤더 이름을 확인해 주세요.")
         return 1
@@ -1320,7 +1617,11 @@ def _cmd_score_grade(args, mapping, input_path) -> int:
 
 def _cmd_score_sum(args, mapping, input_path) -> int:
     """--sum-columns: 점수 열이 없는 채점표에서 지정 범위 열을 합산해 점수로 쓴다."""
-    result = parse_sum_columns_xlsx(input_path, args.sum_columns)
+    result = parse_sum_columns_xlsx(input_path, args.sum_columns, sheet=args.sheet)
+    sheet_error = _sheet_error_message(result)
+    if sheet_error is not None:
+        print(sheet_error)
+        return 1
     if result is None:
         print("합산할 열 범위를 확인해 주세요(예: --sum-columns E:J).")
         return 1
@@ -1438,6 +1739,12 @@ def main(argv=None) -> int:
     p_memo.add_argument("--roster", required=True, help="명렬.json 경로")
     p_memo.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_memo.add_argument("--out", required=True, help="관찰메모.json 저장 경로")
+    p_memo.add_argument(
+        "--sheet",
+        help="처리할 시트명을 지정한다(xlsx 입력 전용). 지정하지 않으면 메모 데이터가 있는 "
+             "시트가 1개일 때만 자동 진행하고, 2개 이상이면 시트를 합치지 않고 exit 1로 "
+             "멈춘 뒤 시트 목록을 안내한다",
+    )
     p_memo.set_defaults(func=_cmd_memo)
 
     p_score = sub.add_parser("score", help="채점표 점수 토큰화(파일 입력 전용)")
@@ -1457,6 +1764,13 @@ def main(argv=None) -> int:
     p_score.add_argument(
         "--sum-columns",
         help="점수 열이 없는 채점표용 — 지정 범위(예: E:J)의 숫자를 합산해 점수로 쓴다",
+    )
+    p_score.add_argument(
+        "--sheet",
+        help="처리할 시트명을 지정한다. 지정하지 않으면 점수(또는 등급·합산) 데이터가 있는 "
+             "시트가 1개일 때만 자동 진행하고, 2개 이상이면 시트를 합치지 않고 exit 1로 "
+             "멈춘 뒤 시트 목록을 안내한다(--column과 별개로 시트마다 열 인덱스가 다르기 "
+             "때문이다)",
     )
     p_score.set_defaults(func=_cmd_score)
 

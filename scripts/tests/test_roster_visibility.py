@@ -149,8 +149,10 @@ def test_real_decimals_are_not_mangled_into_ids(tmp_path):
     """점수 3.5는 3으로 바뀌면 안 된다 — 정수인 실수만 복구한다."""
     rows = [["학번", "이름", "점수"], ["30101", "가상갑", 3.5]]
     _xlsx(tmp_path / "r.xlsx", rows)
-    got = P._rows_from_xlsx(tmp_path / "r.xlsx")
-    assert got[1][2] == "3.5"
+    sheets = P._sheets_from_xlsx(tmp_path / "r.xlsx")
+    assert len(sheets) == 1
+    _name, rows = sheets[0]
+    assert rows[1][2] == "3.5"
 
 
 # ── CLI: 숫자가 실제로 화면에 뜨는가 (이름·학번은 여전히 미출력) ──
