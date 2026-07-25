@@ -131,16 +131,20 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict):
     warnings: list[str] = []
     out = text
     for sid, token in mapping.get("map", {}).items():
-        if sid in out:
-            out = out.replace(sid, token)
+        # 학번은 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
+        out = re.sub(rf"(?<!\d){re.escape(sid)}(?!\d)", token, out)
     for student in roster.get("students", []):
         name = student.get("이름", "")
         sid = str(student.get("학번", ""))
         token = mapping.get("map", {}).get(sid)
         if not name or not token or name not in out:
             continue
-        out = out.replace(name, token)
-        warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid})")
+        # 이름은 한글 문자에 둘러싸인 경우만 제외 (긴 단어 내부 보호)
+        # 앞: 비한글 또는 시작
+        # 뒤: 비한글, 종료, 또는 조사
+        out, count = re.subn(rf"(?<![가-힣]){re.escape(name)}(?=\s|$|[^가-힣]|[과와이은는을를에도만같])", token, out)
+        if count > 0:
+            warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid})")
     return out, warnings
 
 
@@ -148,5 +152,6 @@ def reidentify(text: str, mapping: dict) -> str:
     """토큰을 학번으로 되돌린다(로컬 재결합)."""
     out = text
     for sid, token in mapping.get("map", {}).items():
-        out = out.replace(token, sid)
+        # 토큰도 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
+        out = re.sub(rf"(?<!\d){re.escape(token)}(?!\d)", sid, out)
     return out

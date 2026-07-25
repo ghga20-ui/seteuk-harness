@@ -149,3 +149,24 @@ def test_reidentify_restores_student_ids():
     mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102"])
     token = mapping["map"]["10102"]
     assert reidentify(f"{token} 학생의 세특", mapping) == "10102 학생의 세특"
+
+
+def test_pseudonymize_does_not_corrupt_longer_number():
+    """학번이 다른 숫자열의 일부일 때 그 숫자를 훼손하지 않는다."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    text = "101010번 사물함을 쓰는 10101 학생"
+    out, _ = pseudonymize_text(text, ROSTER, mapping)
+    assert "101010" in out
+    assert mapping["map"]["10101"] in out
+    assert " 10101 " not in out
+
+
+def test_pseudonymize_roundtrip_preserves_unrelated_numbers():
+    """치환 후 재결합하면 원문이 그대로 복원된다."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102"])
+    text = "2026년 3월 15일, 101010번 자료를 읽고 10101 김가상이 발표함."
+    out, _ = pseudonymize_text(text, ROSTER, mapping)
+    restored = reidentify(out, mapping)
+    assert "101010" in restored
+    assert "10101" in restored
+    assert "2026년 3월 15일" in restored
