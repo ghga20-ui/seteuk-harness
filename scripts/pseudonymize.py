@@ -139,12 +139,12 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict):
         token = mapping.get("map", {}).get(sid)
         if not name or not token or name not in out:
             continue
-        # 이름은 한글 문자에 둘러싸인 경우만 제외 (긴 단어 내부 보호)
-        # 앞: 비한글 또는 시작
-        # 뒤: 비한글, 종료, 또는 조사
-        out, count = re.subn(rf"(?<![가-힣]){re.escape(name)}(?=\s|$|[^가-힣]|[과와이은는을를에도만같])", token, out)
+        # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
+        # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
+        # 과탐 가능성(긴 단어 내 포함)은 경고로 교사에게 보고
+        out, count = re.subn(re.escape(name), token, out)
         if count > 0:
-            warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid})")
+            warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
     return out, warnings
 
 

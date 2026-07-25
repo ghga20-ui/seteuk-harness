@@ -170,3 +170,20 @@ def test_pseudonymize_roundtrip_preserves_unrelated_numbers():
     assert "101010" in restored
     assert "10101" in restored
     assert "2026년 3월 15일" in restored
+
+
+def test_pseudonymize_masks_name_glued_to_previous_word():
+    """앞 단어에 붙은 이름도 반드시 치환된다(과소탐 방지 — 개인정보 누락이 최악)."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    out, warnings = pseudonymize_text("급우김가상은 발표를 잘했다.", ROSTER, mapping)
+    assert "김가상" not in out
+    assert mapping["map"]["10101"] in out
+    assert warnings
+
+
+def test_pseudonymize_over_redaction_is_reported_as_warning():
+    """과탐이 발생하면 경고로 보고되어 교사가 인지할 수 있다."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    out, warnings = pseudonymize_text("김가상이해력이 뛰어나다.", ROSTER, mapping)
+    assert "김가상" not in out
+    assert warnings  # 치환 사실이 보고됨
