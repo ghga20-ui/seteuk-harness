@@ -115,7 +115,9 @@ def test_issue_tokens_are_unique_and_not_sequential():
     mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102", "10103"])
     tokens = list(mapping["map"].values())
     assert len(set(tokens)) == 3
-    assert tokens != sorted(tokens, key=lambda t: t)  # 순번 유추 방지: 학번 순 = 토큰 순이 아님
+    # 토큰이 학번 순번에서 파생되지 않았음을 결정론적으로 확인
+    assert all(not t.endswith(sid[-2:]) for sid, t in mapping["map"].items())
+    assert len({t[2:] for t in tokens}) == 3  # 접두사 뒤 난수부가 서로 다름
     for t in tokens:
         assert t.startswith("S-")
 
