@@ -62,3 +62,35 @@ def test_detect_roster_failure_reports_method(tmp_path):
     roster = detect_roster(p)
     assert roster["방식"] == "실패"
     assert roster["students"] == []
+
+
+def test_detect_roster_uses_header_column_for_name(tmp_path):
+    """헤더가 있으면 이름은 '이름' 열에서만 가져온다(중간 열 오인 방지)."""
+    path = _make_xlsx(
+        tmp_path,
+        [("10101", "결석", "김가상"), ("10102", "우수", "이허구")],
+        headers=("학번", "비고", "이름"),
+    )
+    roster = detect_roster(path)
+    names = {s["이름"] for s in roster["students"]}
+    assert names == {"김가상", "이허구"}
+
+
+def test_detect_roster_header_column_order_independent(tmp_path):
+    """이름 열이 학번 열보다 앞에 있어도 정확히 집는다."""
+    path = _make_xlsx(
+        tmp_path,
+        [("김가상", "10101"), ("이허구", "10102")],
+        headers=("이름", "학번"),
+    )
+    roster = detect_roster(path)
+    assert {s["학번"] for s in roster["students"]} == {"10101", "10102"}
+    assert {s["이름"] for s in roster["students"]} == {"김가상", "이허구"}
+
+
+def test_detect_roster_pattern_mode_flags_low_confidence(tmp_path):
+    """헤더 없는 패턴 추정은 신뢰도 낮음으로 표시해 사용자 확인을 유도한다."""
+    path = _make_xlsx(tmp_path, [("10101", "김가상"), ("10102", "이허구")], headers=None)
+    roster = detect_roster(path)
+    assert roster["방식"] == "패턴"
+    assert roster.get("확인필요") is True

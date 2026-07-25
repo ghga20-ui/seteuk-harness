@@ -31,8 +31,42 @@ def _rows_from_text(path):
     return [line.split() for line in text.splitlines() if line.strip()]
 
 
-def _pairs_from_rows(rows):
-    """행 목록에서 (학번, 이름) 쌍을 뽑는다. 긴 본문 셀은 이름 후보에서 제외된다."""
+def _find_header_indices(rows):
+    """헤더 행을 찾아 (id_idx, name_idx, 헤더행번호)를 반환. 없으면 (None, None, -1)."""
+    for i, row in enumerate(rows):
+        id_idx = next((j for j, c in enumerate(row) if c in ("학번", "번호")), None)
+        name_idx = next((j for j, c in enumerate(row) if c == "이름"), None)
+        if id_idx is not None and name_idx is not None:
+            return (id_idx, name_idx, i)
+    return (None, None, -1)
+
+
+def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx):
+    """헤더 행의 열 인덱스를 사용해 (학번, 이름) 쌍을 추출."""
+    pairs, seen = [], set()
+    for i, row in enumerate(rows):
+        if i == header_row_idx:  # 헤더 행 자체는 데이터에서 제외
+            continue
+        # 인덱스 범위 확인
+        if id_idx >= len(row) or name_idx >= len(row):
+            continue
+        sid = row[id_idx]
+        name = row[name_idx]
+        # 학번이 5자리 숫자, 이름이 한글 2~4자 확인
+        if (
+            sid
+            and STUDENT_ID.fullmatch(sid)
+            and name
+            and KOREAN_NAME.fullmatch(name)
+            and sid not in seen
+        ):
+            seen.add(sid)
+            pairs.append({"학번": sid, "이름": name})
+    return pairs
+
+
+def _pairs_from_rows_pattern(rows):
+    """행 목록에서 (학번, 이름) 쌍을 뽑는다(패턴 기반, 낮은 신뢰도). 긴 본문 셀은 이름 후보에서 제외."""
     pairs, seen = [], set()
     for row in rows:
         sid = next((c for c in row if STUDENT_ID.fullmatch(c or "")), None)
@@ -53,14 +87,21 @@ def detect_roster(path) -> dict:
     except Exception:
         rows = []
 
-    header_hit = any(
-        any(c in ("학번", "번호") for c in row) and any(c == "이름" for c in row) for row in rows
-    )
-    students = _pairs_from_rows(rows)
-    if not students:
-        방식 = "실패"
-    elif header_hit:
-        방식 = "표헤더"
+    id_idx, name_idx, header_row_idx = _find_header_indices(rows)
+
+    if id_idx is not None and name_idx is not None:
+        # 헤더 기반 추출
+        students = _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx)
+        if not students:
+            방식 = "실패"
+        else:
+            방식 = "표헤더"
+        return {"students": students, "출처": str(path), "방식": 방식, "확인필요": False}
     else:
-        방식 = "패턴"
-    return {"students": students, "출처": str(path), "방식": 방식}
+        # 헤더가 없으므로 패턴 기반 추출 (낮은 신뢰도)
+        students = _pairs_from_rows_pattern(rows)
+        if not students:
+            방식 = "실패"
+        else:
+            방식 = "패턴"
+        return {"students": students, "출처": str(path), "방식": 방식, "확인필요": True}
