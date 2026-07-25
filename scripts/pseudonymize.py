@@ -305,6 +305,71 @@ def parse_memo_text(path):
     return pairs
 
 
+SCORE_HEADER_ALIASES = {"점수", "총점", "합계", "평가점수"}
+
+
+def _find_score_header_indices(rows, column=None):
+    """헤더 행에서 (학번열, 점수열, 헤더행번호)를 찾는다. 없으면 (None, None, -1).
+
+    column이 주어지면(--column 지정) 공백 무시 비교로 그 헤더만 점수 열로 인정한다.
+    지정이 없으면 SCORE_HEADER_ALIASES 중 하나를 자동 탐지한다.
+    """
+    target = _normalize_header(column) if column else None
+    for i, row in enumerate(rows):
+        id_idx = next((j for j, c in enumerate(row) if c in ("학번", "번호")), None)
+        if target:
+            score_idx = next((j for j, c in enumerate(row) if _normalize_header(c) == target), None)
+        else:
+            score_idx = next(
+                (j for j, c in enumerate(row) if _normalize_header(c) in SCORE_HEADER_ALIASES), None
+            )
+        if id_idx is not None and score_idx is not None:
+            return (id_idx, score_idx, i)
+    return (None, None, -1)
+
+
+def _parse_number(cell):
+    """숫자 문자열을 float로 변환한다. 비었거나 숫자가 아니면 None."""
+    if not cell:
+        return None
+    try:
+        return float(cell)
+    except ValueError:
+        return None
+
+
+def parse_score_xlsx(path, column=None):
+    """채점표 xlsx에서 (학번, 점수) 쌍을 추출한다.
+
+    점수 열 헤더('점수'/'총점'/'합계'/'평가점수' 중 하나, 공백 무시. --column
+    지정 시 해당 헤더만 인정)를 찾지 못하면 None을 반환한다(호출부가 exit 1 +
+    안내로 처리). 반환값은 (pairs, no_score_count) — pairs는 (학번, 점수)
+    리스트이고, no_score_count는 학번은 있으나 점수가 비었거나 숫자가 아니어서
+    건너뛴 행 수다(매핑 유무와 무관하게 이 단계에서 집계한다).
+    """
+    rows = _rows_from_xlsx(path)
+    id_idx, score_idx, header_row_idx = _find_score_header_indices(rows, column)
+    if id_idx is None or score_idx is None:
+        return None
+
+    pairs = []
+    no_score = 0
+    for i, row in enumerate(rows):
+        if i == header_row_idx:
+            continue
+        if id_idx >= len(row) or score_idx >= len(row):
+            continue
+        sid = row[id_idx]
+        if not sid or not STUDENT_ID.fullmatch(sid):
+            continue
+        score = _parse_number(row[score_idx])
+        if score is None:
+            no_score += 1
+            continue
+        pairs.append((sid, score))
+    return pairs, no_score
+
+
 def _xlsx_is_empty(path) -> bool:
     """워크북에 실제 내용(비공백 셀)이 하나도 없는지 확인한다."""
     rows = _rows_from_xlsx(path)
@@ -515,6 +580,78 @@ def _cmd_memo(args) -> int:
     return 0
 
 
+def _to_json_number(v: float):
+    """정수값이면 int로, 아니면 float 그대로 저장한다(15.0 -> 15, 15.5 -> 15.5)."""
+    return int(v) if float(v).is_integer() else v
+
+
+def _format_score_label(v) -> str:
+    """분포 출력용 점수 표기(정수는 소수점 없이)."""
+    return str(int(v)) if float(v).is_integer() else str(v)
+
+
+def _cmd_score(args) -> int:
+    """채점표(파일)의 점수를 토큰화한다.
+
+    채점표를 에이전트가 직접 열지 않도록 하기 위한 명령이다 — 학번·이름이 함께
+    있는 채점표 원본 대신, 이 CLI가 산출한 토큰↔점수(점수.json)만 에이전트에게
+    넘긴다. 톤 등급은 이 산출물의 점수를 교사와 정한 구간표에 적용해 파생한다.
+    """
+    mapping = _read_json(args.mapping)
+
+    input_path = Path(args.input)
+    if input_path.suffix.lower() != ".xlsx":
+        print("지원하지 않는 입력 형식입니다. xlsx 파일을 사용해 주세요.")
+        return 1
+
+    if _xlsx_is_empty(input_path):
+        print("채점표 파일이 비어 있습니다.")
+        return 1
+
+    result = parse_score_xlsx(input_path, column=args.column)
+    if result is None:
+        print("점수 열 헤더를 '점수'로 지정하거나 --column 으로 알려 주세요.")
+        return 1
+    pairs, no_score = result
+
+    if not pairs and no_score == 0:
+        print("점수를 한 건도 읽지 못했습니다. 학번 열과 점수 열이 있는지 확인해 주세요.")
+        return 1
+
+    out_items = []
+    excluded_unmapped = 0
+    for sid, score in pairs:
+        token = mapping.get("map", {}).get(str(sid))
+        if token is None:
+            excluded_unmapped += 1
+            continue
+        out_items.append({"토큰": token, "점수": _to_json_number(score)})
+
+    _write_json({"items": out_items}, args.out)
+
+    column_label = args.column or "점수"
+    if not out_items:
+        print(
+            f"점수 수집: 0명(열: '{column_label}'). "
+            f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+        )
+        return 0
+
+    dist: dict = {}
+    for item in out_items:
+        dist[item["점수"]] = dist.get(item["점수"], 0) + 1
+    dist_str = ", ".join(
+        f"{_format_score_label(score)}점 {count}명"
+        for score, count in sorted(dist.items(), key=lambda kv: -kv[0])
+    )
+
+    print(
+        f"점수 수집: {len(out_items)}명(열: '{column_label}'). 분포 — {dist_str}. "
+        f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+    )
+    return 0
+
+
 def _cmd_finalize(args) -> int:
     draft = _read_json(args.input)
     roster = _read_json(args.roster)
@@ -589,6 +726,16 @@ def main(argv=None) -> int:
     p_memo.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_memo.add_argument("--out", required=True, help="관찰메모.json 저장 경로")
     p_memo.set_defaults(func=_cmd_memo)
+
+    p_score = sub.add_parser("score", help="채점표 점수 토큰화(파일 입력 전용)")
+    p_score.add_argument("input", help="채점표 원본 파일(xlsx)")
+    p_score.add_argument("--roster", required=True, help="명렬.json 경로")
+    p_score.add_argument("--mapping", required=True, help="매핑.json 경로")
+    p_score.add_argument("--out", required=True, help="점수.json 저장 경로")
+    p_score.add_argument(
+        "--column", help="점수 열 헤더명(기본: 점수/총점/합계/평가점수 자동 탐지, 공백 무시)"
+    )
+    p_score.set_defaults(func=_cmd_score)
 
     p_finalize = sub.add_parser("finalize", help="토큰 → 실명 재결합")
     p_finalize.add_argument("input", help='토큰 초안 JSON({"classes":[{"name","students":[{"토큰",...}]}]})')

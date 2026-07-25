@@ -553,3 +553,143 @@ def test_memo_cli_empty_file_fails(tmp_path):
     assert not out.exists()
     assert "메모 파일이 비어 있습니다" in proc.stdout
     assert_no_pii(proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# score — 채점표 점수를 대화나 직접 열람이 아니라 CLI로만 받는다.
+# 핵심 계약: 학번·이름이 stdout/stderr/산출 파일에 등장하면 안 된다.
+# 단, 점수 분포(집계값)는 교사 확인 편의를 위해 stdout에 출력한다.
+# ---------------------------------------------------------------------------
+
+def _make_score_xlsx(tmp_path, rows, header=("학번", "점수"), filename="채점표.xlsx"):
+    from openpyxl import Workbook
+
+    p = tmp_path / filename
+    wb = Workbook()
+    ws = wb.active
+    ws.append(list(header))
+    for row in rows:
+        ws.append(list(row))
+    wb.save(p)
+    return p
+
+
+def test_score_cli_happy_path(tmp_path):
+    """정상 경로: 토큰↔점수 매핑이 정확히 대응한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102", "10103"])
+
+    p = _make_score_xlsx(tmp_path, [
+        ("10101", "15"),
+        ("10102", "13"),
+        ("10103", "15"),
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert out.exists()
+
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 3
+    by_token = {item["토큰"]: item["점수"] for item in saved["items"]}
+    assert by_token[mapping["map"]["10101"]] == 15
+    assert by_token[mapping["map"]["10102"]] == 13
+    assert by_token[mapping["map"]["10103"]] == 15
+
+
+def test_score_cli_no_pii_in_stdout_stderr_and_output(tmp_path):
+    """핵심 계약: stdout·stderr·산출 파일 어디에도 이름·학번이 없어야 한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    p = _make_score_xlsx(tmp_path, [
+        ("10101", "15"),
+        ("10102", "9"),
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+    assert_no_pii(out.read_text(encoding="utf-8"))
+
+
+def test_score_cli_reports_distribution(tmp_path):
+    """점수 분포는 집계값이라 식별정보가 아니므로 stdout에 출력한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102", "10103"])
+
+    p = _make_score_xlsx(tmp_path, [
+        ("10101", "15"),
+        ("10102", "13"),
+        ("10103", "15"),
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert "점수 수집: 3명" in proc.stdout
+    assert "열: '점수'" in proc.stdout
+    assert "15점 2명" in proc.stdout
+    assert "13점 1명" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_score_cli_missing_header_fails(tmp_path):
+    """점수 열 헤더('점수'/'총점'/'합계'/'평가점수')가 없으면 exit 1 + 안내."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = _make_score_xlsx(tmp_path, [("10101", "성실히 참여함")], header=("학번", "비고"))
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "점수 열 헤더를 '점수'로 지정하거나 --column 으로 알려 주세요." in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_score_cli_excludes_unmapped_and_missing_scores_with_counts(tmp_path):
+    """미제출자(매핑 없음)와 빈 점수는 제외하되 건수로 보고한다."""
+    roster_path = _write_roster_json(tmp_path)
+    # 10103(박미정)은 미제출 → 토큰 미발급
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    p = _make_score_xlsx(tmp_path, [
+        ("10101", "15"),
+        ("10102", ""),       # 점수 없음
+        ("10103", "12"),     # 매핑 없음(미제출자)
+    ])
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 1
+    assert saved["items"][0]["토큰"] == mapping["map"]["10101"]
+    assert "제외: 매핑 없음 1건, 점수 없음 1건" in proc.stdout
+    assert_no_pii(proc.stdout)
+    assert_no_pii(out.read_text(encoding="utf-8"))
+
+
+def test_score_cli_explicit_column_option(tmp_path):
+    """--column으로 비표준 헤더명을 명시 지정하면 그 열을 점수 열로 인식한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = _make_score_xlsx(tmp_path, [("10101", "18")], header=("학번", "수행평가점수"))
+
+    out = tmp_path / "점수.json"
+    proc = run(
+        "score", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path),
+        "--out", str(out), "--column", "수행평가점수",
+    )
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 1
+    assert saved["items"][0]["점수"] == 18
+    assert "열: '수행평가점수'" in proc.stdout
+    assert_no_pii(proc.stdout)
