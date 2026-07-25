@@ -115,9 +115,9 @@ def test_issue_tokens_are_unique_and_not_sequential():
     mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102", "10103"])
     tokens = list(mapping["map"].values())
     assert len(set(tokens)) == 3
-    # 토큰이 학번 순번에서 파생되지 않았음을 결정론적으로 확인
-    assert all(not t.endswith(sid[-2:]) for sid, t in mapping["map"].items())
-    assert len({t[2:] for t in tokens}) == 3  # 접두사 뒤 난수부가 서로 다름
+    # 토큰 형식만 결정론적으로 검사한다(무작위성 자체는 secrets 모듈이 보장)
+    import re as _re
+    assert all(_re.fullmatch(r"S-[0-9A-F]{4}", t) for t in tokens)
     for t in tokens:
         assert t.startswith("S-")
 
@@ -222,6 +222,19 @@ def test_scan_leak_clean_text_has_no_issues():
 def test_scan_token_residue_detects_leftover_tokens():
     assert scan_token_residue("S-3F7A 학생은 분석함.") == ["S-3F7A"]
     assert scan_token_residue("학생은 분석함.") == []
+
+
+def test_scan_token_residue_detects_token_glued_both_sides():
+    """토큰이 한글에 앞뒤로 붙어 있어도 잔존을 탐지한다(개인정보 게이트는 대칭이어야 함)."""
+    assert scan_token_residue("김S-3F7A 학생") == ["S-3F7A"]
+    assert scan_token_residue("김S-3F7A의 갈등") == ["S-3F7A"]
+    assert scan_token_residue("S-3F7A의 갈등") == ["S-3F7A"]
+
+
+def test_scan_token_residue_does_not_match_longer_hex_run():
+    """더 긴 16진 문자열의 일부는 토큰으로 오인하지 않는다."""
+    assert scan_token_residue("S-3F7AB 코드") == []
+    assert scan_token_residue("S-3F7A1 코드") == []
 
 
 def test_scan_id_in_narrative_finds_bare_student_id():
