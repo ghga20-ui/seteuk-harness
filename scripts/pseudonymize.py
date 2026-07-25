@@ -20,6 +20,31 @@ KOREAN_NAME = re.compile(r"^[가-힣]{2,8}$")
 MAX_HEADER_NAME_LEN = 20  # 헤더 경로(이름 열이 명시된 경우)의 과도한 길이 방지용 상한선
 
 
+def _char_spaced_pattern(s: str) -> str:
+    """문자(숫자) 사이에 임의의 공백을 허용하는 정규식 패턴 문자열을 만든다.
+
+    예: '김하윤' -> '김\\s*하\\s*윤'. 학생이 '김 하윤'처럼 띄어 쓰거나 학번을
+    '301 01'처럼 띄어 쓰는 표기 변형을 놓치지 않기 위한 공용 유틸이다(골든리포트
+    §6 FIX A). 치환(pseudonymize_text)과 탐지(scan_leak)가 같은 패턴을 써야
+    "치환은 하는데 검사는 못 잡는" 게이트 누수가 생기지 않는다.
+    """
+    return r"\s*".join(re.escape(ch) for ch in s)
+
+
+def _name_pattern(name: str) -> re.Pattern:
+    """이름을 공백 내성 정규식으로 컴파일한다(치환·탐지 공용)."""
+    return re.compile(_char_spaced_pattern(name))
+
+
+def _id_pattern(sid: str) -> re.Pattern:
+    """학번을 공백 내성 정규식으로 컴파일한다.
+
+    숫자 경계((?<!\\d)/(?!\\d))는 공백 허용과 무관하게 그대로 유지한다 —
+    '101010' 같은 무관한 숫자열 안의 부분 문자열을 오탐하지 않기 위해서다.
+    """
+    return re.compile(rf"(?<!\d){_char_spaced_pattern(sid)}(?!\d)")
+
+
 def _rows_from_xlsx(path):
     from openpyxl import load_workbook
 
@@ -203,6 +228,14 @@ SHORT_NAME_WARNING = "1자 이름은 일반명사 충돌 위험으로 본문 치
 # 남아 LLM에 전송되는 것은 별개의 심각한 개인정보 문제다. 따라서 CLI(mask,
 # memo)는 파이프라인 진입 전에 명렬을 검사해, 성 결합 후에도 1자 이름이
 # 남아 있으면 저장 자체를 차단한다(경고-후-진행이 아니라 중단).
+DETECTION_LIMIT_WARNING = (
+    "⚠ 탐지 한계: 한자·영문 표기, 별명, 3자 이상 띄어쓰기, 명렬에 없는 사람"
+    "(교사·가족·친구)의 이름은 탐지하지 못합니다. 이 도구는 위험을 줄일 뿐 "
+    "0으로 만들지 않습니다."
+)
+# 골든리포트 §6 — "경고 0건"을 "안전하다"로 오인하지 않도록, mask 실행마다
+# 경고 건수와 무관하게 이 문구를 항상 stdout에 출력한다(_cmd_mask 참고).
+
 SHORT_NAME_BLOCK_MESSAGE = (
     "중단: 1자 이름 {n}건이 명렬에 있습니다. 1자 이름은 본문에서 안전하게 가릴 수 "
     "없어(일반명사 충돌) 그대로 전송될 위험이 있습니다. 명렬의 이름 열을 성이 포함된 "
@@ -234,6 +267,18 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
     1자 이름은 일반명사와 충돌할 위험이 압도적이므로(실제 명렬의 전체 이름은
     2자 이상) 본문 치환 대상에서 제외하고, 제외 사실만 경고에 남긴다(이름 값
     자체는 경고 문자열에 남기지 않는다 — SHORT_NAME_WARNING은 고정 문구다).
+
+    공백 내성(골든리포트 §6 FIX A): '김 하윤'처럼 글자 사이에 공백을 넣어 쓴
+    이름, '301 01'처럼 숫자 사이에 공백을 넣어 쓴 학번도 놓치지 않는다. 학번은
+    숫자 경계를 유지해 '101010' 같은 무관한 숫자열은 그대로 보존한다.
+
+    성 제외 이름(FIX B): 명렬 이름이 3자 이상이면 성을 뺀 나머지(2자 이상,
+    예: '김하윤' -> '하윤')도 치환 대상에 추가한다 — '하윤이는'처럼 성을 빼고
+    부르는 표현을 놓치지 않기 위해서다. 2자 이름(예: '박봄')은 성을 빼면 1자
+    ('봄')가 되므로 추가하지 않는다(1자 이름 차단 원칙과 동일 — 일반명사·
+    작품명 오탐 방지). **반드시 전체 이름을 먼저, 성 제외 이름을 그 다음에
+    치환한다** — 순서가 뒤집히면 '김'+토큰처럼 성 글자가 홀로 남는 잔재가
+    생긴다.
     """
     warnings: list[str] = []
     out = text
@@ -241,8 +286,8 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
 
     for sid, token in mapping.get("map", {}).items():
         # 학번은 고유 식별자라 동명이인 같은 오귀속 위험이 없다 — 항상 자기 토큰으로.
-        # 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
-        out = re.sub(rf"(?<!\d){re.escape(sid)}(?!\d)", token, out)
+        # 앞뒤가 숫자가 아닐 때만 치환 (경계 보호, 공백 내성)
+        out = _id_pattern(sid).sub(token, out)
 
     students = roster.get("students", [])
     if owner_id is not None:
@@ -253,31 +298,44 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
     for student in students:
         name = student.get("이름", "")
         sid = str(student.get("학번", ""))
-        if not name or name not in out:
+        if not name:
             continue
         if len(name) < 2:
             # 1자 이름('봄' 등 일반명사와 충돌)은 치환하지 않는다 — 작품명 등
             # 무관한 단어를 파괴하는 것이 실명 노출보다 더 심각한 품질 훼손이다.
-            warnings.append(SHORT_NAME_WARNING)
+            if _name_pattern(name).search(out):
+                warnings.append(SHORT_NAME_WARNING)
             continue
+
+        # 긴 것부터 치환: 전체 이름을 먼저, 성 제외 이름(3자 이상만)을 그 다음에.
+        targets = [name]
+        if len(name) >= 3:
+            targets.append(name[1:])
+
         if owner_id is not None and sid == owner_id:
             token = mapping.get("map", {}).get(sid)
-            # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
-            # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
-            if token:
-                out, count = re.subn(re.escape(name), token, out)
+            if not token:
+                continue
+            for target in targets:
+                # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
+                # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
+                out, count = _name_pattern(target).subn(token, out)
                 if count > 0:
-                    warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
+                    label = "이름" if target == name else "성 제외 이름"
+                    warnings.append(f"본문에서 {label} '{target}'을 토큰으로 치환함(학번 {sid}, {count}회)")
             continue
+
         # 자신이 아닌 명렬 이름(동명이인 포함) — 남의 토큰이 아니라 중립어로 치환
-        out, count = re.subn(re.escape(name), "급우", out)
-        if count > 0:
-            if mapping.get("map", {}).get(sid) is not None:
-                warnings.append(f"본문에서 급우 이름 '{name}'을 급우로 치환함(학번 {sid}, {count}회)")
-            else:
-                # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
-                # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
-                warnings.append(f"본문에서 미제출자 이름 '{name}'을 급우로 치환함")
+        for target in targets:
+            out, count = _name_pattern(target).subn("급우", out)
+            if count > 0:
+                label = "급우 이름" if target == name else "급우 이름(성 제외)"
+                if mapping.get("map", {}).get(sid) is not None:
+                    warnings.append(f"본문에서 {label} '{target}'을 급우로 치환함(학번 {sid}, {count}회)")
+                else:
+                    # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
+                    # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
+                    warnings.append(f"본문에서 미제출자 {label} '{target}'을 급우로 치환함")
     return out, warnings
 
 
@@ -299,20 +357,30 @@ TOKEN_PATTERN = re.compile(r"(?<![0-9A-Za-z])S-[0-9A-Fa-f]{4}(?![0-9A-Fa-f])")
 def scan_leak(text: str, roster: dict, scope: str = "구조"):
     """LLM 전송 전후 텍스트에서 식별정보를 찾는다.
 
-    학번은 어디서 발견되든 FAIL(오탐이 없는 강한 신호).
+    학번은 어디서 발견되든 FAIL(오탐이 없는 강한 신호). 공백을 넣어 쓴 학번
+    ('301 01')도 같은 공백 내성 패턴으로 잡는다(FIX A) — 치환은 하는데 검사는
+    못 잡으면 게이트가 새는 셈이라 pseudonymize_text와 같은 관용도를 쓴다.
     이름은 구조 필드에서만 FAIL이고 본문에서는 WARN이다 — 일반명사와 겹치는
     이름('봄' 등)은 원리적으로 100% 탐지가 불가능하므로 게이트로 삼지 않는다.
+    성 제외 이름(3자 이상 이름의 나머지, 예: '하윤')은 일반명사·타 단어와 겹칠
+    오탐 위험이 더 크므로 스코프와 무관하게 항상 WARN이다(FAIL 아님, FIX B).
     """
     issues: list[tuple[str, str, str]] = []
     for sid in {str(s.get("학번", "")) for s in roster.get("students", [])}:
         # 학번은 숫자 경계로 검사한다 — pseudonymize_text가 일부러 보존하는
         # "101010번" 같은 무관한 숫자열 안의 부분 문자열을 오탐하면 교착이 생긴다.
-        if sid and re.search(rf"(?<!\d){re.escape(sid)}(?!\d)", text):
+        if sid and _id_pattern(sid).search(text):
             issues.append(("FAIL", "ID_LEAK", f"학번 {sid} 노출"))
     level = "FAIL" if scope == "구조" else "WARN"
     for name in {s.get("이름", "") for s in roster.get("students", [])}:
-        if name and name in text:
+        if not name:
+            continue
+        if _name_pattern(name).search(text):
             issues.append((level, "NAME_LEAK", f"이름 '{name}' 노출({scope})"))
+        if len(name) >= 3:
+            given = name[1:]
+            if _name_pattern(given).search(text):
+                issues.append(("WARN", "NAME_LEAK", f"성 제외 이름 '{given}' 노출({scope})"))
     return issues
 
 
@@ -887,6 +955,8 @@ def _cmd_mask(args) -> int:
 
     _write_json({"items": out_items}, args.out)
     print(f"가명화: {len(out_items)}건 처리, 본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건.")
+    # 경고가 0건이어도 "탐지 한계 = 0건 = 안전"으로 오인되면 안 되므로 매번 출력한다.
+    print(DETECTION_LIMIT_WARNING)
     return 0
 
 

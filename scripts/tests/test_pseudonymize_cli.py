@@ -269,6 +269,28 @@ def test_mask_cli_happy_path(tmp_path):
     assert_no_pii(saved_text)
     assert "가명화: 2건 처리" in proc.stdout
     assert "학번 유출 0건" in proc.stdout
+    assert "탐지 한계" in proc.stdout  # 경고가 있어도 탐지 한계 문구는 항상 출력된다
+
+
+def test_mask_cli_always_prints_detection_limit_warning_even_with_zero_name_warnings(tmp_path):
+    """골든리포트 §6: 경고 0건이어도 '경고 0건 = 안전'으로 오인되지 않도록,
+    mask 성공 stdout 끝에 탐지 한계 문구가 항상 출력되어야 한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    input_json = tmp_path / "입력.json"
+    input_json.write_text(json.dumps({"items": [
+        {"학번": "10101", "본문": "봄을 노래한 시를 분석함."},
+        {"학번": "10102", "본문": "가을을 노래한 시를 분석함."},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    out = tmp_path / "토큰본.json"
+    proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert "치환 경고 0건" in proc.stdout
+    assert "탐지 한계" in proc.stdout
+    assert "0으로 만들지 않습니다" in proc.stdout
+    assert_no_pii(proc.stdout)
 
 
 def test_mask_cli_leak_blocks_save(tmp_path):

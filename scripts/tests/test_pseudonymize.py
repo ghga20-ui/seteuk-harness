@@ -556,6 +556,137 @@ def test_detect_stale_mapping_alias_also_finds_roster():
     assert detect_stale_mapping is detect_stale_artifacts
 
 
+# ---------------------------------------------------------------------------
+# 골든리포트 §6 "false sense of safety" — 이름 표기 변형(공백·성 제외)을
+# 탐지하지 못하면서 "경고 0건"으로 보고되어 안전하다고 오인되는 문제.
+# FIX A: 공백 내성 치환(이름 글자 사이, 학번 숫자 사이 공백 허용, 숫자 경계 유지)
+# FIX B: 성 제외 이름 치환("하윤이는"처럼 성을 빼고 부르는 경우, 3자 이상 이름만)
+# ---------------------------------------------------------------------------
+
+def test_pseudonymize_replaces_name_with_single_internal_space():
+    roster = {"students": [{"학번": "30301", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30301"])
+    token = mapping["map"]["30301"]
+    out, warnings = pseudonymize_text("김 하윤 학생이 발표했다.", roster, mapping, owner_id="30301")
+    assert token in out
+    assert "김" not in out
+    assert "하윤" not in out
+    assert warnings
+
+
+def test_pseudonymize_replaces_name_with_double_internal_space():
+    roster = {"students": [{"학번": "30301", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30301"])
+    token = mapping["map"]["30301"]
+    out, _ = pseudonymize_text("김  하윤 학생이 발표했다.", roster, mapping, owner_id="30301")
+    assert token in out
+    assert "김" not in out
+
+
+def test_pseudonymize_replaces_id_with_internal_space():
+    roster = {"students": [{"학번": "30101", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30101"])
+    token = mapping["map"]["30101"]
+    out, _ = pseudonymize_text("301 01 학생의 발표", roster, mapping)
+    assert token in out
+    assert "301 01" not in out
+
+
+def test_pseudonymize_spaced_id_pattern_does_not_corrupt_unrelated_numbers():
+    """FIX A가 공백을 허용하더라도 숫자 경계는 유지되어 무관한 숫자열은 보존된다
+    (기존 회귀: 101010, 2026년, 84일)."""
+    roster = {"students": [{"학번": "30101", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30101"])
+    text = "101010번 자료를 읽고 2026년 3월에 84일째 되는 날 썼다."
+    out, _ = pseudonymize_text(text, roster, mapping)
+    assert "101010" in out
+    assert "2026년" in out
+    assert "84일" in out
+
+
+def test_pseudonymize_given_name_without_surname_gets_owner_token():
+    """'하윤이는'처럼 성을 빼고 부르면 3자 이상 이름의 나머지(2자 이상)도
+    치환 대상이 되어야 한다(FIX B)."""
+    roster = {"students": [{"학번": "30201", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30201"])
+    token = mapping["map"]["30201"]
+    out, warnings = pseudonymize_text("하윤이는 최선을 다했다.", roster, mapping, owner_id="30201")
+    assert token in out
+    assert "하윤" not in out
+    assert warnings
+
+
+def test_pseudonymize_given_name_without_surname_becomes_neutral_for_non_owner():
+    roster = {"students": [{"학번": "30201", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30201"])
+    out, warnings = pseudonymize_text("하윤이는 최선을 다했다.", roster, mapping)  # owner_id 없음
+    assert "급우" in out
+    assert "하윤" not in out
+    assert warnings
+
+
+def test_pseudonymize_replaces_longest_name_first_no_orphan_surname_char():
+    """치환 순서가 뒤집혀 성 제외 이름을 먼저 치환하면 '김'+토큰 형태의 잔재가
+    남는다 — 반드시 전체 이름(김하윤)을 먼저 치환해야 한다."""
+    roster = {"students": [{"학번": "30201", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30201"])
+    token = mapping["map"]["30201"]
+    out, _ = pseudonymize_text("김하윤은 시집을 분석했다.", roster, mapping, owner_id="30201")
+    assert out.count(token) == 1
+    assert "김" not in out
+    assert "하윤" not in out
+
+
+def test_pseudonymize_two_char_name_without_surname_not_added_as_target():
+    """2자 이름('박봄')에서 성을 빼면 1자('봄')가 되므로 추가 치환 대상에
+    넣지 않는다 — 기존 회귀(작품명 '봄봄(김유정)' 보존)와 동일한 원칙이다."""
+    roster = {"students": [{"학번": "10105", "이름": "박봄"}]}
+    mapping = issue_tokens(roster, submitted_ids=["10105"])
+    text = "'봄봄(김유정)'을 선정하여 해학성을 분석했다."
+    out, _ = pseudonymize_text(text, roster, mapping, owner_id="10105")
+    assert "봄봄(김유정)" in out
+
+
+DUP_GIVEN_NAME_ROSTER = {"students": [
+    {"학번": "30105", "이름": "김하윤"},
+    {"학번": "30110", "이름": "이하윤"},
+]}
+
+
+def test_pseudonymize_no_surname_duplicate_given_name_keeps_owner_classmate_split():
+    """동명이인(성 제외 이름이 같은 '하윤')이어도 owner_id에 따라 각자 자기
+    토큰만 받아야 한다(FIX B에도 오귀속 방지가 유지되어야 함)."""
+    mapping = issue_tokens(DUP_GIVEN_NAME_ROSTER, submitted_ids=["30105", "30110"])
+    token_a = mapping["map"]["30105"]
+    token_b = mapping["map"]["30110"]
+
+    out_a, _ = pseudonymize_text("하윤이는 성실하게 참여했다.", DUP_GIVEN_NAME_ROSTER, mapping, owner_id="30105")
+    out_b, _ = pseudonymize_text("하윤이는 꾸준히 노력했다.", DUP_GIVEN_NAME_ROSTER, mapping, owner_id="30110")
+
+    assert token_a in out_a
+    assert token_b not in out_a
+    assert token_b in out_b
+    assert token_a not in out_b
+
+
+# ---------------------------------------------------------------------------
+# scan_leak: 공백 낀 학번은 FAIL, 성 제외 이름은 WARN(FAIL 아님) — FIX A/B
+# ---------------------------------------------------------------------------
+
+def test_scan_leak_flags_spaced_id_as_fail():
+    roster = {"students": [{"학번": "30101", "이름": "김하윤"}]}
+    issues = scan_leak("301 01 학생의 감상문", roster, scope="본문")
+    assert ("FAIL", "ID_LEAK") in _codes(issues)
+
+
+def test_scan_leak_given_name_without_surname_is_warn_even_in_structured_scope():
+    """성 제외 이름은 오탐 위험이 크므로 구조 필드에서도 FAIL이 아니라 WARN이다."""
+    roster = {"students": [{"학번": "30101", "이름": "김하윤"}]}
+    issues = scan_leak("하윤과 함께 발표했다", roster, scope="구조")
+    assert ("WARN", "NAME_LEAK") in _codes(issues)
+    assert not any(lv == "FAIL" for lv, _ in _codes(issues))
+
+
 def test_destroy_artifacts_removes_all_and_returns_names_no_pii(tmp_path, capsys):
     """destroy_artifacts는 여러 산출물을 지우고 파일명 목록을 반환하되,
     이름·학번 등 내용은 출력하지 않아야 한다(적대적 감사 FINDING 3)."""
