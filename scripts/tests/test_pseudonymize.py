@@ -167,6 +167,42 @@ def test_detect_roster_pattern_mode_recognizes_long_korean_names(tmp_path):
     assert roster["students"][0]["이름"] == "응우옌티탄흐엉"
 
 
+# ---------------------------------------------------------------------------
+# 성 열 + 이름 열 결합 — 명렬에 성 열과 이름 열이 분리되어 있으면(흔한 명렬 형식)
+# 1자 이름('봄')으로 조용히 오인되지 않도록 성+이름을 합쳐 전체 이름으로 쓴다.
+# ---------------------------------------------------------------------------
+
+def test_detect_roster_combines_surname_and_given_name_columns(tmp_path):
+    """성='김', 이름='봄'인 명렬은 '김봄'으로 결합되고 결합 플래그가 남아야 한다."""
+    path = _make_xlsx(
+        tmp_path,
+        [("10104", "김", "봄")],
+        headers=("학번", "성", "이름"),
+    )
+    roster = detect_roster(path)
+    assert roster["students"] == [{"학번": "10104", "이름": "김봄"}]
+    assert roster.get("성이름결합") is True
+
+
+def test_detect_roster_combines_surname_alias_seongssi(tmp_path):
+    """'성씨' 표기도 성 열로 인식해 결합한다."""
+    path = _make_xlsx(
+        tmp_path,
+        [("10104", "김", "봄")],
+        headers=("학번", "성씨", "이름"),
+    )
+    roster = detect_roster(path)
+    assert roster["students"] == [{"학번": "10104", "이름": "김봄"}]
+    assert roster.get("성이름결합") is True
+
+
+def test_detect_roster_no_surname_column_no_combine_flag(tmp_path):
+    """성 열이 없는 명렬은 결합 플래그가 없어야 한다(기존 동작 보존)."""
+    path = _make_xlsx(tmp_path, [("10101", "김가상")])
+    roster = detect_roster(path)
+    assert not roster.get("성이름결합")
+
+
 from pseudonymize import issue_tokens, pseudonymize_text, reidentify, SHORT_NAME_WARNING
 
 ROSTER = {"students": [

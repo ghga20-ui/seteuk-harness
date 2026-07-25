@@ -105,6 +105,49 @@ def test_roster_cli_skipped_rows_warns_without_pii(tmp_path):
     assert_no_pii(proc.stderr)
 
 
+def test_roster_cli_short_name_warns_but_exits_zero(tmp_path):
+    """1자 이름이 감지되면 mask/memo 이전에 미리 경고하되(교사가 고칠 기회), 인식
+    자체는 성공(exit 0)으로 처리해 명렬.json은 저장된다."""
+    from openpyxl import Workbook
+
+    p = tmp_path / "명단.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "이름"])
+    ws.append(["10104", "봄"])
+    ws.append(["10105", "한소율"])
+    wb.save(p)
+
+    out = tmp_path / "명렬.json"
+    proc = run("roster", str(p), "--out", str(out))
+    assert proc.returncode == 0
+    assert out.exists()
+    assert "1자 이름" in proc.stdout
+    assert "봄" not in proc.stdout
+    assert "한소율" not in proc.stdout
+
+
+def test_roster_cli_surname_column_reports_combination_without_values(tmp_path):
+    """성 열과 이름 열을 결합했다는 사실은 알리되 값은 출력하지 않는다."""
+    from openpyxl import Workbook
+
+    p = tmp_path / "명단.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "성", "이름"])
+    ws.append(["10104", "김", "봄"])
+    wb.save(p)
+
+    out = tmp_path / "명렬.json"
+    proc = run("roster", str(p), "--out", str(out))
+    assert proc.returncode == 0
+    assert "성 열과 이름 열을 합쳐 전체 이름으로 사용합니다." in proc.stdout
+    assert "김" not in proc.stdout
+    assert "봄" not in proc.stdout
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved["students"] == [{"학번": "10104", "이름": "김봄"}]
+
+
 def test_roster_cli_zero_detected_fails(tmp_path):
     p = tmp_path / "빈파일.txt"
     p.write_text("아무 명단도 없는 문서입니다.\n", encoding="utf-8")
@@ -295,9 +338,10 @@ def test_mask_cli_duplicate_names_each_item_gets_own_token(tmp_path):
     assert "이서준" not in body_a and "이서준" not in body_b
 
 
-def test_mask_cli_single_char_name_warns_without_leaking_name_value(tmp_path):
-    """1자 이름('봄')이 있어도 작품명이 보존되고, 경고는 나오되 이름 값 자체는
-    stdout에 등장하지 않아야 한다."""
+def test_mask_cli_single_char_name_blocks_pipeline_without_leaking_name_value(tmp_path):
+    """1자 이름('봄')이 명렬에 남아 있으면(성 결합으로도 해소되지 않으면) 그 이름을
+    본문에서 안전하게 가릴 수 없으므로 경고로 넘어가지 않고 저장 자체를 차단한다
+    (fail-closed). 차단 메시지에도 이름 값 자체는 등장하지 않아야 한다."""
     roster = {"students": [
         {"학번": "10104", "이름": "봄"},
         {"학번": "10105", "이름": "한소율"},
@@ -314,15 +358,33 @@ def test_mask_cli_single_char_name_warns_without_leaking_name_value(tmp_path):
 
     out = tmp_path / "토큰본.json"
     proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
-    assert proc.returncode == 0
-    saved = json.loads(out.read_text(encoding="utf-8"))
-    for item in saved["items"]:
-        assert "봄봄(김유정)" in item["본문"]
-
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "중단" in proc.stdout
     assert "1자 이름" in proc.stdout
     assert "봄" not in proc.stdout
     assert "한소율" not in proc.stdout
     assert_no_pii(proc.stderr)
+
+
+def test_mask_cli_surname_combined_roster_no_longer_blocks(tmp_path):
+    """성 열+이름 열이 결합되어 명렬에 2자 이상 이름만 남으면 정상 진행된다."""
+    roster = {"students": [{"학번": "10104", "이름": "김봄"}]}
+    roster_path = tmp_path / "명렬.json"
+    roster_path.write_text(json.dumps(roster, ensure_ascii=False), encoding="utf-8")
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10104"])
+
+    input_json = tmp_path / "입력.json"
+    input_json.write_text(json.dumps({"items": [
+        {"학번": "10104", "본문": "'봄봄(김유정)'을 선정하여 해학성을 분석함."},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    out = tmp_path / "토큰본.json"
+    proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert out.exists()
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert "봄봄(김유정)" in saved["items"][0]["본문"]
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +682,45 @@ def test_memo_cli_empty_file_fails(tmp_path):
     assert not out.exists()
     assert "메모 파일이 비어 있습니다" in proc.stdout
     assert_no_pii(proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# memo — 1자 이름 fail-closed (mask와 동일한 정책이 memo에도 적용되어야 한다)
+# ---------------------------------------------------------------------------
+
+def test_memo_cli_single_char_name_blocks_pipeline_without_leaking_name_value(tmp_path):
+    """1자 이름이 명렬에 남아 있으면 관찰 메모 토큰화도 저장하지 않고 exit 1로
+    중단한다. 차단 메시지에 이름 값이 등장하면 안 된다."""
+    roster = {"students": [{"학번": "10104", "이름": "봄"}]}
+    roster_path = tmp_path / "명렬.json"
+    roster_path.write_text(json.dumps(roster, ensure_ascii=False), encoding="utf-8")
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10104"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text("10104: 질문이 꾸준했고 봄의 발표 태도가 안정적임.\n", encoding="utf-8")
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "중단" in proc.stdout
+    assert "1자 이름" in proc.stdout
+    assert "봄" not in proc.stdout
+    assert_no_pii(proc.stderr)
+
+
+def test_memo_cli_normal_roster_unaffected_by_short_name_gate(tmp_path):
+    """정상(2자 이상) 명렬에서는 회귀 없이 종전대로 관찰 메모 토큰화가 통과한다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text("10101: 성실히 참여함.\n", encoding="utf-8")
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert out.exists()
 
 
 # ---------------------------------------------------------------------------

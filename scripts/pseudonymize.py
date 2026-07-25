@@ -40,16 +40,24 @@ def _rows_from_text(path):
 
 
 def _find_header_indices(rows):
-    """헤더 행을 찾아 (id_idx, name_idx, 헤더행번호)를 반환. 없으면 (None, None, -1)."""
+    """헤더 행을 찾아 (id_idx, name_idx, surname_idx, 헤더행번호)를 반환.
+    없으면 (None, None, None, -1).
+
+    surname_idx는 "성" 또는 "성씨" 열이 이름 열과 함께 있을 때만 채워진다.
+    성·이름이 분리된 명렬(흔한 형식)에서 이름 열만 보면 1자 이름으로 오인되어
+    본문 치환에서 제외되고, 그 이름이 그대로 LLM에 노출되는 문제가 있었다 —
+    성 열을 찾아 결합하면 이 문제가 근본적으로 사라진다.
+    """
     for i, row in enumerate(rows):
         id_idx = next((j for j, c in enumerate(row) if c in ("학번", "번호")), None)
         name_idx = next((j for j, c in enumerate(row) if c == "이름"), None)
+        surname_idx = next((j for j, c in enumerate(row) if c in ("성", "성씨")), None)
         if id_idx is not None and name_idx is not None:
-            return (id_idx, name_idx, i)
-    return (None, None, -1)
+            return (id_idx, name_idx, surname_idx, i)
+    return (None, None, None, -1)
 
 
-def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx):
+def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx, surname_idx=None):
     """헤더 행의 열 인덱스를 사용해 (학번, 이름) 쌍을 추출.
 
     헤더가 "이름"이라고 명시적으로 지목한 열이므로 이름 형식(한글 2~4자 등)을
@@ -58,6 +66,12 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx):
     이름(Nguyen), 1자 이름(봄) 등 실재하는 학생이 명렬에서 조용히 누락되는
     버그가 있었다. 이름은 비어 있지 않고 과도하게 길지 않으면 그대로 채택한다.
     학번은 헤더가 지목한 열이므로 숫자인지만 느슨히 확인한다.
+
+    surname_idx가 주어지면(성 열이 이름 열과 함께 있으면) 그 행의 성 셀이
+    비어 있지 않은 한 성 + 이름을 합쳐 전체 이름으로 사용한다. 한글 성명은
+    성 1자 이상 + 이름 1자 이상이 결합되어야 완전하므로, 분리된 명렬에서
+    이름 열만 보면 1자 이름으로 오인되어 본문에서 안전하게 가릴 수 없는
+    상태가 된다 — 결합이 그 문제를 원천적으로 없앤다.
 
     학번·이름 중 하나만 비어 있는 데이터 행은 건너뛰고 건너뛴 행 수를 함께
     반환한다(둘 다 비어 있는 완전한 공백 행은 집계하지 않는다).
@@ -72,6 +86,10 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx):
             continue
         sid = row[id_idx]
         name = row[name_idx]
+        if surname_idx is not None and surname_idx < len(row):
+            surname = row[surname_idx]
+            if surname:
+                name = surname + name
         if not sid and not name:
             continue  # 완전히 빈 행은 건너뜀 집계 대상이 아니다
         sid_ok = bool(sid) and sid.isdigit()
@@ -108,19 +126,24 @@ def detect_roster(path) -> dict:
     except Exception:
         rows = []
 
-    id_idx, name_idx, header_row_idx = _find_header_indices(rows)
+    id_idx, name_idx, surname_idx, header_row_idx = _find_header_indices(rows)
 
     if id_idx is not None and name_idx is not None:
         # 헤더 기반 추출
-        students, skipped = _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx)
+        students, skipped = _pairs_from_rows_with_indices(
+            rows, id_idx, name_idx, header_row_idx, surname_idx
+        )
         if not students:
             방식 = "실패"
         else:
             방식 = "표헤더"
-        return {
+        result = {
             "students": students, "출처": str(path), "방식": 방식,
             "확인필요": False, "건너뜀": skipped,
         }
+        if surname_idx is not None:
+            result["성이름결합"] = True
+        return result
     else:
         # 헤더가 없으므로 패턴 기반 추출 (낮은 신뢰도)
         students = _pairs_from_rows_pattern(rows)
@@ -153,6 +176,28 @@ def issue_tokens(roster: dict, submitted_ids, existing: dict | None = None) -> d
 
 
 SHORT_NAME_WARNING = "1자 이름은 일반명사 충돌 위험으로 본문 치환에서 제외함"
+
+# CLI 계층 fail-closed 정책용. pseudonymize_text 자체는(품질 보호를 위해) 1자
+# 이름을 치환하지 않는 현재 동작을 유지하지만, 그 결과 실명이 본문에 그대로
+# 남아 LLM에 전송되는 것은 별개의 심각한 개인정보 문제다. 따라서 CLI(mask,
+# memo)는 파이프라인 진입 전에 명렬을 검사해, 성 결합 후에도 1자 이름이
+# 남아 있으면 저장 자체를 차단한다(경고-후-진행이 아니라 중단).
+SHORT_NAME_BLOCK_MESSAGE = (
+    "중단: 1자 이름 {n}건이 명렬에 있습니다. 1자 이름은 본문에서 안전하게 가릴 수 "
+    "없어(일반명사 충돌) 그대로 전송될 위험이 있습니다. 명렬의 이름 열을 성이 포함된 "
+    "전체 이름으로 고쳐 주세요(성·이름이 분리된 명렬이면 합쳐 주세요)."
+)
+
+
+def count_short_names(roster: dict) -> int:
+    """명렬에서 2자 미만(1자) 이름이 몇 건인지 센다.
+
+    한글 성명은 성 1자 이상 + 이름 1자 이상이 결합되어야 완전하므로, 1자
+    이름은 성·이름이 분리된 명렬이 아직 결합되지 않았거나 데이터 오류임을
+    뜻한다 — 어느 경우든 그 이름은 일반명사와 충돌해 본문에서 안전하게 가릴
+    수 없으므로 CLI 계층에서 이 값을 fail-closed 판단에 사용한다.
+    """
+    return sum(1 for s in roster.get("students", []) if len(s.get("이름", "")) < 2)
 
 
 def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
@@ -468,11 +513,20 @@ def _cmd_roster(args) -> int:
         return 1
     _write_json(roster, args.out)
     print(f"명렬 인식: {n}명 (방식: {roster.get('방식', '?')}). 이름은 출력하지 않습니다.")
+    if roster.get("성이름결합"):
+        print("성 열과 이름 열을 합쳐 전체 이름으로 사용합니다.")
     if roster.get("확인필요"):
         print("확인필요: 표 헤더를 찾지 못해 패턴으로 추정한 결과입니다. 원본 표를 확인해 주세요.")
     skipped = roster.get("건너뜀", 0)
     if skipped > 0:
         print(f"경고: {skipped}개 행을 건너뛰었습니다(학번 또는 이름이 비어 있음). 명단을 확인해 주세요.")
+    short = count_short_names(roster)
+    if short > 0:
+        print(
+            f"경고: 1자 이름 {short}건이 명렬에 있습니다. 본문에서 안전하게 가릴 수 없어"
+            "(일반명사 충돌) mask/memo 단계에서 저장이 차단됩니다. 명렬의 이름 열을 성이 "
+            "포함된 전체 이름으로 고쳐 주세요(성·이름이 분리된 명렬이면 합쳐 주세요)."
+        )
     return 0
 
 
@@ -503,6 +557,13 @@ def _cmd_mask(args) -> int:
     roster = _read_json(args.roster)
     mapping = _read_json(args.mapping)
 
+    short = count_short_names(roster)
+    if short > 0:
+        # 이 시점 이후로는 어떤 처리도 진행하지 않는다 — 결정론적 검사이므로
+        # 데이터를 열어보지 않고도(값은 출력하지 않고) 바로 판단할 수 있다.
+        print(SHORT_NAME_BLOCK_MESSAGE.format(n=short))
+        return 1
+
     items = data.get("items", [])
     missing = sum(
         1 for item in items
@@ -519,13 +580,11 @@ def _cmd_mask(args) -> int:
 
     out_items = []
     total_warnings = 0
-    short_name_warnings = 0
     for item in items:
         sid = str(item.get("학번", ""))
         token = mapping["map"][sid]
         text, warnings = pseudonymize_text(item.get("본문", ""), roster, mapping, owner_id=sid)
         total_warnings += len(warnings)
-        short_name_warnings += sum(1 for w in warnings if w == SHORT_NAME_WARNING)
         out_items.append({"토큰": token, "본문": text})
 
     leak_count = 0
@@ -539,11 +598,6 @@ def _cmd_mask(args) -> int:
 
     _write_json({"items": out_items}, args.out)
     print(f"가명화: {len(out_items)}건 처리, 본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건.")
-    if short_name_warnings > 0:
-        print(
-            f"경고: 1자 이름 {short_name_warnings}건은 본문 치환에서 제외했습니다(일반명사 충돌 위험). "
-            "명렬의 이름 열이 성을 포함한 전체 이름인지 확인해 주세요."
-        )
     return 0
 
 
@@ -556,6 +610,11 @@ def _cmd_memo(args) -> int:
     """
     roster = _read_json(args.roster)
     mapping = _read_json(args.mapping)
+
+    short = count_short_names(roster)
+    if short > 0:
+        print(SHORT_NAME_BLOCK_MESSAGE.format(n=short))
+        return 1
 
     input_path = Path(args.input)
     suffix = input_path.suffix.lower()
@@ -588,7 +647,6 @@ def _cmd_memo(args) -> int:
     out_items = []
     excluded = 0
     total_warnings = 0
-    short_name_warnings = 0
     for sid, memo in pairs:
         token = mapping.get("map", {}).get(str(sid))
         if token is None:
@@ -596,7 +654,6 @@ def _cmd_memo(args) -> int:
             continue
         text, warnings = pseudonymize_text(memo, roster, mapping, owner_id=str(sid))
         total_warnings += len(warnings)
-        short_name_warnings += sum(1 for w in warnings if w == SHORT_NAME_WARNING)
         out_items.append({"토큰": token, "메모": text})
 
     leak_count = 0
@@ -620,11 +677,6 @@ def _cmd_memo(args) -> int:
         f"관찰 메모: {len(out_items)}건 수집({excluded}건은 매핑 없음으로 제외). "
         f"본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건."
     )
-    if short_name_warnings > 0:
-        print(
-            f"경고: 1자 이름 {short_name_warnings}건은 본문 치환에서 제외했습니다(일반명사 충돌 위험). "
-            "명렬의 이름 열이 성을 포함한 전체 이름인지 확인해 주세요."
-        )
     return 0
 
 
