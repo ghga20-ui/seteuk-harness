@@ -240,3 +240,170 @@ def destroy_mapping(path) -> bool:
 def detect_stale_mapping(dir_path) -> list:
     """이전 실행이 비정상 종료돼 남은 매핑표를 찾는다(실행 전 점검용)."""
     return sorted(Path(dir_path).glob(MAPPING_GLOB))
+
+
+# ---------------------------------------------------------------------------
+# CLI — 명렬(실명·학번)이 LLM 컨텍스트로 들어가지 않도록, 에이전트는 이 CLI를
+# subprocess로 실행하고 stdout의 요약(인원수·건수)만 읽는다.
+# stdout/stderr에는 이름·학번을 절대 출력하지 않는다 — 이 계약이 기능의 전부다.
+# ---------------------------------------------------------------------------
+
+def _read_json(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_json(obj, path) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=1)
+
+
+def _cmd_roster(args) -> int:
+    roster = detect_roster(args.input)
+    n = len(roster.get("students", []))
+    if n == 0:
+        print("명렬 인식: 0명. 학번·이름 두 열이 있는 표(엑셀) 또는 '학번 이름' 형식의 "
+              "텍스트로 다시 붙여넣어 주세요.")
+        return 1
+    _write_json(roster, args.out)
+    print(f"명렬 인식: {n}명 (방식: {roster.get('방식', '?')}). 이름은 출력하지 않습니다.")
+    if roster.get("확인필요"):
+        print("확인필요: 표 헤더를 찾지 못해 패턴으로 추정한 결과입니다. 원본 표를 확인해 주세요.")
+    return 0
+
+
+def _load_submitted_ids(args) -> list[str]:
+    if args.submitted:
+        return [s.strip() for s in args.submitted.split(",") if s.strip()]
+    with open(args.submitted_from, encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def _cmd_issue(args) -> int:
+    roster = _read_json(args.roster)
+    submitted_ids = _load_submitted_ids(args)
+    existing = None
+    if Path(args.out).exists():
+        existing = _read_json(args.out)
+    mapping = issue_tokens(roster, submitted_ids, existing=existing)
+    _write_json(mapping, args.out)
+    total = len(roster.get("students", []))
+    issued = len(mapping.get("map", {}))
+    not_issued = max(total - issued, 0)
+    print(f"토큰 발급: 제출자 {issued}명, 미발급(미제출) {not_issued}명.")
+    return 0
+
+
+def _cmd_mask(args) -> int:
+    data = _read_json(args.input)
+    roster = _read_json(args.roster)
+    mapping = _read_json(args.mapping)
+
+    out_items = []
+    total_warnings = 0
+    for item in data.get("items", []):
+        sid = str(item.get("학번", ""))
+        token = mapping.get("map", {}).get(sid)
+        if token is None:
+            print("가명화 중단: 입력 항목에 매핑(토큰)이 없는 학번이 있습니다. "
+                  "issue 명령을 먼저 실행해 토큰을 발급하세요.")
+            return 1
+        text, warnings = pseudonymize_text(item.get("본문", ""), roster, mapping)
+        total_warnings += len(warnings)
+        out_items.append({"토큰": token, "본문": text})
+
+    leak_count = 0
+    for item in out_items:
+        issues = scan_leak(item["본문"], roster, scope="본문")
+        leak_count += sum(1 for level, code, _ in issues if level == "FAIL" and code == "ID_LEAK")
+
+    if leak_count > 0:
+        print(f"가명화 중단: 학번 유출 {leak_count}건이 발견되어 저장하지 않았습니다.")
+        return 1
+
+    _write_json({"items": out_items}, args.out)
+    print(f"가명화: {len(out_items)}건 처리, 본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건.")
+    return 0
+
+
+def _cmd_finalize(args) -> int:
+    draft = _read_json(args.input)
+    roster = _read_json(args.roster)
+    mapping = _read_json(args.mapping)
+
+    token_to_sid = {t: s for s, t in mapping.get("map", {}).items()}
+    sid_to_name = {str(s.get("학번", "")): s.get("이름", "") for s in roster.get("students", [])}
+
+    new_classes = []
+    restored = 0
+    for cls in draft.get("classes", []):
+        new_students = []
+        for student in cls.get("students", []):
+            token = student.get("토큰")
+            sid = token_to_sid.get(token)
+            if sid is None:
+                print("재결합 실패: 매핑에 없는 토큰이 있어 1:1 복원을 완료할 수 없습니다.")
+                return 1
+            new_student = {"학번": sid, "이름": sid_to_name.get(sid, "")}
+            for key, value in student.items():
+                if key == "토큰":
+                    continue
+                if isinstance(value, str):
+                    value = reidentify(value, mapping)
+                new_student[key] = value
+            new_students.append(new_student)
+            restored += 1
+        new_classes.append({"name": cls.get("name", ""), "students": new_students})
+
+    _write_json({"classes": new_classes}, args.out)
+    print(f"재결합: {restored}명 복원 완료.")
+    return 0
+
+
+def main(argv=None) -> int:
+    import argparse
+    import sys
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+
+    parser = argparse.ArgumentParser(
+        description="가명처리 CLI — 명렬(실명·학번)을 로컬에서만 다루고, "
+                    "에이전트는 stdout 요약(인원수·건수)만 읽는다."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_roster = sub.add_parser("roster", help="명렬 감지")
+    p_roster.add_argument("input", help="명단 원본 파일(xlsx 또는 텍스트)")
+    p_roster.add_argument("--out", required=True, help="명렬.json 저장 경로")
+    p_roster.set_defaults(func=_cmd_roster)
+
+    p_issue = sub.add_parser("issue", help="제출자 토큰 발급")
+    p_issue.add_argument("--roster", required=True, help="명렬.json 경로")
+    group = p_issue.add_mutually_exclusive_group(required=True)
+    group.add_argument("--submitted", help="쉼표로 구분한 제출자 학번 목록")
+    group.add_argument("--submitted-from", help="제출자 학번이 한 줄에 하나씩 있는 텍스트 파일")
+    p_issue.add_argument("--out", required=True, help="매핑.json 저장 경로(기존 파일이 있으면 재사용·추가 발급)")
+    p_issue.set_defaults(func=_cmd_issue)
+
+    p_mask = sub.add_parser("mask", help="본문·학번 가명화")
+    p_mask.add_argument("input", help='입력 JSON({"items":[{"학번","본문"}]})')
+    p_mask.add_argument("--roster", required=True, help="명렬.json 경로")
+    p_mask.add_argument("--mapping", required=True, help="매핑.json 경로")
+    p_mask.add_argument("--out", required=True, help="토큰본.json 저장 경로")
+    p_mask.set_defaults(func=_cmd_mask)
+
+    p_finalize = sub.add_parser("finalize", help="토큰 → 실명 재결합")
+    p_finalize.add_argument("input", help='토큰 초안 JSON({"classes":[{"name","students":[{"토큰",...}]}]})')
+    p_finalize.add_argument("--roster", required=True, help="명렬.json 경로")
+    p_finalize.add_argument("--mapping", required=True, help="매핑.json 경로")
+    p_finalize.add_argument("--out", required=True, help="실명초안.json 저장 경로")
+    p_finalize.set_defaults(func=_cmd_finalize)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
