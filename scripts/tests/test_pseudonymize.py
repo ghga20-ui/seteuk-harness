@@ -605,15 +605,52 @@ def test_pseudonymize_spaced_id_pattern_does_not_corrupt_unrelated_numbers():
 
 
 def test_pseudonymize_given_name_without_surname_gets_owner_token():
-    """'하윤이는'처럼 성을 빼고 부르면 3자 이상 이름의 나머지(2자 이상)도
-    치환 대상이 되어야 한다(FIX B)."""
+    """'하윤이는'처럼 인명 전용 접미(호칭 조사)가 붙어 성을 빼고 부르면
+    3자 이상 이름의 나머지(2자 이상)도 치환 대상이 되어야 한다(FIX B).
+    접미('이는')는 문장이 깨지지 않도록 치환 후에도 보존되어야 한다."""
     roster = {"students": [{"학번": "30201", "이름": "김하윤"}]}
     mapping = issue_tokens(roster, submitted_ids=["30201"])
     token = mapping["map"]["30201"]
     out, warnings = pseudonymize_text("하윤이는 최선을 다했다.", roster, mapping, owner_id="30201")
     assert token in out
     assert "하윤" not in out
+    assert "이는" in out  # 접미 보존
+    assert out == f"{token}이는 최선을 다했다."
     assert warnings
+
+
+def test_pseudonymize_given_name_with_vocative_suffix_replaced():
+    """'하윤아'(호격 조사)도 치환 대상이며 접미는 보존된다."""
+    roster = {"students": [{"학번": "30201", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30201"])
+    token = mapping["map"]["30201"]
+    out, _ = pseudonymize_text("하윤아, 발표 준비를 정말 잘했더라.", roster, mapping, owner_id="30201")
+    assert token in out
+    assert "하윤" not in out
+    assert out.startswith(f"{token}아")
+
+
+def test_pseudonymize_given_name_with_subject_particle_suffix_replaced():
+    """'하윤이가'(주격 조사)도 치환 대상이며 접미는 보존된다."""
+    roster = {"students": [{"학번": "30201", "이름": "김하윤"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30201"])
+    token = mapping["map"]["30201"]
+    out, _ = pseudonymize_text("하윤이가 발표를 맡았다.", roster, mapping, owner_id="30201")
+    assert token in out
+    assert "하윤" not in out
+    assert out.startswith(f"{token}이가")
+
+
+def test_pseudonymize_given_name_bare_without_honorific_suffix_not_replaced():
+    """실측(학생 답안 69,034자) 결과: 성 제외 이름이 맨몸으로 등장하면 시어·
+    일반어와 충돌 위험이 실재한다(예: 성 제외 이름이 '하늘'인 경우 '하늘을
+    우러러'). 인명 전용 접미가 없으면 건드리지 않는다 — 가상 인물로 재현."""
+    roster = {"students": [{"학번": "30401", "이름": "김하늘"}]}
+    mapping = issue_tokens(roster, submitted_ids=["30401"])
+    text = "하늘을 우러러 한 점 부끄럼이 없기를 바라는 마음을 다뤘다."
+    out, warnings = pseudonymize_text(text, roster, mapping, owner_id="30401")
+    assert out == text
+    assert not warnings
 
 
 def test_pseudonymize_given_name_without_surname_becomes_neutral_for_non_owner():
@@ -622,6 +659,7 @@ def test_pseudonymize_given_name_without_surname_becomes_neutral_for_non_owner()
     out, warnings = pseudonymize_text("하윤이는 최선을 다했다.", roster, mapping)  # owner_id 없음
     assert "급우" in out
     assert "하윤" not in out
+    assert "이는" in out  # 접미 보존
     assert warnings
 
 
@@ -679,12 +717,21 @@ def test_scan_leak_flags_spaced_id_as_fail():
     assert ("FAIL", "ID_LEAK") in _codes(issues)
 
 
-def test_scan_leak_given_name_without_surname_is_warn_even_in_structured_scope():
-    """성 제외 이름은 오탐 위험이 크므로 구조 필드에서도 FAIL이 아니라 WARN이다."""
+def test_scan_leak_given_name_with_honorific_suffix_is_warn_even_in_structured_scope():
+    """인명 전용 접미(호칭 조사)가 붙은 성 제외 이름은 오탐 위험이 있으므로
+    구조 필드에서도 FAIL이 아니라 WARN이다."""
     roster = {"students": [{"학번": "30101", "이름": "김하윤"}]}
-    issues = scan_leak("하윤과 함께 발표했다", roster, scope="구조")
+    issues = scan_leak("하윤아 함께 발표했다", roster, scope="구조")
     assert ("WARN", "NAME_LEAK") in _codes(issues)
     assert not any(lv == "FAIL" for lv, _ in _codes(issues))
+
+
+def test_scan_leak_given_name_bare_without_suffix_is_not_warned():
+    """실측 근거(맨몸 성 제외 이름 오탐 4건, 조사 동반 0건)에 따라 치환 조건과
+    검사 조건을 일치시킨다 — 맨몸 등장은 WARN도 내지 않는다."""
+    roster = {"students": [{"학번": "30401", "이름": "김하늘"}]}
+    issues = scan_leak("하늘을 우러러 다짐한다.", roster, scope="본문")
+    assert issues == []
 
 
 def test_destroy_artifacts_removes_all_and_returns_names_no_pii(tmp_path, capsys):

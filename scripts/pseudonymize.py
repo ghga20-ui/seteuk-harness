@@ -45,6 +45,34 @@ def _id_pattern(sid: str) -> re.Pattern:
     return re.compile(rf"(?<!\d){_char_spaced_pattern(sid)}(?!\d)")
 
 
+# 성 제외 이름(given name) 뒤에 붙는 인명 전용 호칭·조사. 실측(학생 답안
+# 69,034자)에서 성 제외 이름이 맨몸으로 등장한 4건은 전부 시어·일반어와의
+# 충돌(예: 성 제외 이름이 '하늘'인 경우 "하늘을 우러러")이었고, 조사가 붙어
+# 인명임이 확실한 경우는 0건이었다. 그래서 성 제외 이름은 이 접미가 뒤따를
+# 때만 치환·탐지 대상으로 삼는다 — 맨몸 등장은 의도적으로 건드리지 않는다.
+GIVEN_NAME_HONORIFIC_SUFFIXES = sorted(
+    ["이는", "이가", "이를", "이랑", "이한테", "이와", "이도", "이의", "이네",
+     "아", "야", "쌤", "샘", "선배", "누나", "형", "언니", "오빠"],
+    key=len, reverse=True,
+)
+
+
+def _given_name_suffix_pattern(given: str) -> re.Pattern:
+    """성 제외 이름 + 인명 전용 접미(호칭 조사)를 캡처 그룹으로 나눠 컴파일한다.
+
+    그룹1=이름, 그룹2=접미. 치환 시 접미(그룹2)는 그대로 보존해야 문장이
+    깨지지 않는다('하윤이는' -> 'S-XXXX이는', '이는'까지 삼키면 안 됨).
+    """
+    suffix_alt = "|".join(re.escape(s) for s in GIVEN_NAME_HONORIFIC_SUFFIXES)
+    return re.compile(f"({_char_spaced_pattern(given)})({suffix_alt})")
+
+
+def _sub_given_name_with_suffix(text: str, given: str, replacement: str):
+    """성 제외 이름을 접미 보존 조건으로 치환한다. 반환은 (결과, 치환건수)."""
+    pattern = _given_name_suffix_pattern(given)
+    return pattern.subn(lambda m: replacement + m.group(2), text)
+
+
 def _rows_from_xlsx(path):
     from openpyxl import load_workbook
 
@@ -272,13 +300,21 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
     이름, '301 01'처럼 숫자 사이에 공백을 넣어 쓴 학번도 놓치지 않는다. 학번은
     숫자 경계를 유지해 '101010' 같은 무관한 숫자열은 그대로 보존한다.
 
-    성 제외 이름(FIX B): 명렬 이름이 3자 이상이면 성을 뺀 나머지(2자 이상,
-    예: '김하윤' -> '하윤')도 치환 대상에 추가한다 — '하윤이는'처럼 성을 빼고
-    부르는 표현을 놓치지 않기 위해서다. 2자 이름(예: '박봄')은 성을 빼면 1자
-    ('봄')가 되므로 추가하지 않는다(1자 이름 차단 원칙과 동일 — 일반명사·
-    작품명 오탐 방지). **반드시 전체 이름을 먼저, 성 제외 이름을 그 다음에
-    치환한다** — 순서가 뒤집히면 '김'+토큰처럼 성 글자가 홀로 남는 잔재가
-    생긴다.
+    성 제외 이름(FIX B, 실측으로 범위 축소): 명렬 이름이 3자 이상이면 성을 뺀
+    나머지(2자 이상, 예: '김하윤' -> '하윤')를 치환 대상에 추가하되, **인명
+    전용 접미(호칭 조사: 이는/이가/이를/아/야/쌤/선배 등, GIVEN_NAME_HONORIFIC_
+    SUFFIXES)가 뒤따를 때만** 치환한다 — '하윤이는'은 치환하지만 맨몸 '하윤'은
+    건드리지 않는다. 실제 학생 답안 69,034자 실측에서 성 제외 이름이 맨몸으로
+    등장한 4건은 전부 시어·일반어 충돌(예: 성 제외 이름이 '하늘'인 경우
+    "하늘을 우러러")이었고 조사 동반 등장은 0건이었다 — 맨몸까지 치환하면
+    골든리포트 §5의 결함 #3('봄봄' -> 'S-7880S-7880')과 같은 종류의 품질
+    훼손만 낳고 얻는 것이 없다. 접미는 치환 후에도 보존한다('하윤이는' ->
+    'S-XXXX이는', 접미까지 삼키면 문장이 깨진다). 2자 이름(예: '박봄')은 성을
+    빼면 1자('봄')가 되므로 추가하지 않는다(1자 이름 차단 원칙과 동일 —
+    일반명사·작품명 오탐 방지). **반드시 전체 이름을 먼저, 성 제외 이름을 그
+    다음에 치환한다** — 순서가 뒤집히면 '김'+토큰처럼 성 글자가 홀로 남는
+    잔재가 생긴다. 전체 이름 자체는 오탐 위험이 없으므로 지금처럼 맨몸으로도
+    치환한다(이번 범위 축소는 성 제외 형태에만 적용).
     """
     warnings: list[str] = []
     out = text
@@ -307,35 +343,44 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
                 warnings.append(SHORT_NAME_WARNING)
             continue
 
-        # 긴 것부터 치환: 전체 이름을 먼저, 성 제외 이름(3자 이상만)을 그 다음에.
-        targets = [name]
-        if len(name) >= 3:
-            targets.append(name[1:])
+        given = name[1:] if len(name) >= 3 else None
 
         if owner_id is not None and sid == owner_id:
             token = mapping.get("map", {}).get(sid)
             if not token:
                 continue
-            for target in targets:
-                # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
-                # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
-                out, count = _name_pattern(target).subn(token, out)
-                if count > 0:
-                    label = "이름" if target == name else "성 제외 이름"
-                    warnings.append(f"본문에서 {label} '{target}'을 토큰으로 치환함(학번 {sid}, {count}회)")
+            # 전체 이름은 맨몸으로도 치환한다 — 오탐 위험이 없다(경계 없이 무조건
+            # 치환. 과소탐 방지 — 개인정보 누락이 최악. 한글은 조사로 어절 경계가
+            # 흐려지므로 경계 검사를 하면 안 됨). 반드시 이 치환이 먼저 끝나야
+            # 성 제외 이름 치환에서 '김'+토큰 잔재가 남지 않는다.
+            out, count = _name_pattern(name).subn(token, out)
+            if count > 0:
+                warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
+            if given:
+                # 성 제외 이름은 인명 전용 접미(호칭 조사)가 뒤따를 때만 치환한다
+                # — 맨몸 등장은 시어·일반어와 충돌 위험이 실재하므로 건드리지
+                # 않는다(실측 근거). 접미는 보존한다.
+                out, count2 = _sub_given_name_with_suffix(out, given, token)
+                if count2 > 0:
+                    warnings.append(f"본문에서 성 제외 이름 '{given}'을 토큰으로 치환함(학번 {sid}, {count2}회)")
             continue
 
         # 자신이 아닌 명렬 이름(동명이인 포함) — 남의 토큰이 아니라 중립어로 치환
-        for target in targets:
-            out, count = _name_pattern(target).subn("급우", out)
-            if count > 0:
-                label = "급우 이름" if target == name else "급우 이름(성 제외)"
+        out, count = _name_pattern(name).subn("급우", out)
+        if count > 0:
+            if mapping.get("map", {}).get(sid) is not None:
+                warnings.append(f"본문에서 급우 이름 '{name}'을 급우로 치환함(학번 {sid}, {count}회)")
+            else:
+                # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
+                # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
+                warnings.append(f"본문에서 미제출자 이름 '{name}'을 급우로 치환함")
+        if given:
+            out, count2 = _sub_given_name_with_suffix(out, given, "급우")
+            if count2 > 0:
                 if mapping.get("map", {}).get(sid) is not None:
-                    warnings.append(f"본문에서 {label} '{target}'을 급우로 치환함(학번 {sid}, {count}회)")
+                    warnings.append(f"본문에서 급우 이름(성 제외) '{given}'을 급우로 치환함(학번 {sid}, {count2}회)")
                 else:
-                    # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
-                    # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
-                    warnings.append(f"본문에서 미제출자 {label} '{target}'을 급우로 치환함")
+                    warnings.append(f"본문에서 미제출자 급우 이름(성 제외) '{given}'을 급우로 치환함")
     return out, warnings
 
 
@@ -362,8 +407,12 @@ def scan_leak(text: str, roster: dict, scope: str = "구조"):
     못 잡으면 게이트가 새는 셈이라 pseudonymize_text와 같은 관용도를 쓴다.
     이름은 구조 필드에서만 FAIL이고 본문에서는 WARN이다 — 일반명사와 겹치는
     이름('봄' 등)은 원리적으로 100% 탐지가 불가능하므로 게이트로 삼지 않는다.
-    성 제외 이름(3자 이상 이름의 나머지, 예: '하윤')은 일반명사·타 단어와 겹칠
-    오탐 위험이 더 크므로 스코프와 무관하게 항상 WARN이다(FAIL 아님, FIX B).
+    성 제외 이름(3자 이상 이름의 나머지, 예: '하윤')은 인명 전용 접미(호칭
+    조사)가 뒤따를 때만 검사한다 — pseudonymize_text의 치환 조건과 반드시
+    일치시킨다(치환은 안 하는데 검사만 하면, 혹은 그 반대면 게이트가 새거나
+    무의미한 경고가 남발된다). 맨몸 등장은 시어·일반어 충돌 실측 근거로
+    검사하지 않는다. 접미가 있어 검사 대상이 되어도 스코프와 무관하게 항상
+    WARN이다(FAIL 아님, FIX B) — 오탐 위험이 여전히 남기 때문이다.
     """
     issues: list[tuple[str, str, str]] = []
     for sid in {str(s.get("학번", "")) for s in roster.get("students", [])}:
@@ -379,7 +428,7 @@ def scan_leak(text: str, roster: dict, scope: str = "구조"):
             issues.append((level, "NAME_LEAK", f"이름 '{name}' 노출({scope})"))
         if len(name) >= 3:
             given = name[1:]
-            if _name_pattern(given).search(text):
+            if _given_name_suffix_pattern(given).search(text):
                 issues.append(("WARN", "NAME_LEAK", f"성 제외 이름 '{given}' 노출({scope})"))
     return issues
 
