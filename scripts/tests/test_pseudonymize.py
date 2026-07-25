@@ -106,6 +106,67 @@ def test_detect_roster_pattern_mode_flags_low_confidence(tmp_path):
     assert roster.get("확인필요") is True
 
 
+# ---------------------------------------------------------------------------
+# 재현된 실제 버그: 헤더가 명시적으로 "이름"이라고 지목한 열조차 KOREAN_NAME
+# 형식 검사({2,4}자 한글)를 통과해야 채택되어, 다문화·공백·영문·1자 이름을 가진
+# 실재 학생이 명렬에서 조용히 누락되었다. 헤더가 있으면 그 열을 신뢰해야 한다.
+# ---------------------------------------------------------------------------
+
+def test_detect_roster_header_accepts_diverse_real_name_formats(tmp_path):
+    """실제 존재하는 학생 이름 형식(다문화 성명·공백·영문·1자)이 헤더 열 신뢰로
+    모두 인식되어야 한다 — 이름 형식 검사를 헤더 경로에 적용하면 안 된다."""
+    path = _make_xlsx(
+        tmp_path,
+        [
+            ("10101", "응우옌티탄흐엉"),  # 7자 다문화 성명
+            ("10102", "박 서준"),  # 공백 포함
+            ("10103", "Nguyen"),  # 영문
+            ("10104", "봄"),  # 1자
+        ],
+    )
+    roster = detect_roster(path)
+    names = {s["이름"] for s in roster["students"]}
+    assert names == {"응우옌티탄흐엉", "박 서준", "Nguyen", "봄"}
+    assert len(roster["students"]) == 4
+
+
+def test_detect_roster_header_skips_rows_missing_name_and_counts(tmp_path):
+    """헤더 경로에서 이름 열이 비어 있는 데이터 행은 건너뛰고 '건너뜀' 카운트가 증가한다."""
+    path = _make_xlsx(
+        tmp_path,
+        [("10101", "김가상"), ("10102", ""), ("10103", "이허구")],
+    )
+    roster = detect_roster(path)
+    assert len(roster["students"]) == 2
+    assert roster["건너뜀"] == 1
+
+
+def test_detect_roster_header_skips_rows_missing_id_and_counts(tmp_path):
+    """학번 열이 비어 있는 데이터 행도 마찬가지로 건너뛰고 집계된다."""
+    path = _make_xlsx(
+        tmp_path,
+        [("10101", "김가상"), ("", "이허구"), ("10103", "박미정")],
+    )
+    roster = detect_roster(path)
+    assert len(roster["students"]) == 2
+    assert roster["건너뜀"] == 1
+
+
+def test_detect_roster_header_no_skip_when_clean(tmp_path):
+    """건너뛴 행이 없으면 '건너뜀'은 0이어야 한다(키 자체는 항상 존재)."""
+    path = _make_xlsx(tmp_path, [("10101", "김가상"), ("10102", "이허구")])
+    roster = detect_roster(path)
+    assert roster["건너뜀"] == 0
+
+
+def test_detect_roster_pattern_mode_recognizes_long_korean_names(tmp_path):
+    """패턴 경로(헤더 없음)에서도 5~8자 한글 이름(다문화 성명)을 인식한다."""
+    path = _make_xlsx(tmp_path, [("10101", "응우옌티탄흐엉")], headers=None)
+    roster = detect_roster(path)
+    assert len(roster["students"]) == 1
+    assert roster["students"][0]["이름"] == "응우옌티탄흐엉"
+
+
 from pseudonymize import issue_tokens, pseudonymize_text, reidentify
 
 ROSTER = {"students": [

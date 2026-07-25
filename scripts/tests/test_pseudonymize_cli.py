@@ -84,6 +84,27 @@ def test_roster_cli_pattern_mode_adds_warning(tmp_path):
     assert_no_pii(proc.stdout)
 
 
+def test_roster_cli_skipped_rows_warns_without_pii(tmp_path):
+    """건너뛴 행이 있으면 인원수만으로 경고하고, 이름·학번은 출력하지 않는다."""
+    from openpyxl import Workbook
+
+    p = tmp_path / "명단.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "이름"])
+    ws.append(["10101", "김가상"])
+    ws.append(["10102", ""])  # 이름이 비어 있어 건너뜀
+    ws.append(["10103", "이허구"])
+    wb.save(p)
+
+    out = tmp_path / "명렬.json"
+    proc = run("roster", str(p), "--out", str(out))
+    assert proc.returncode == 0
+    assert "경고: 1개 행을 건너뛰었습니다(학번 또는 이름이 비어 있음). 명단을 확인해 주세요." in proc.stdout
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+
+
 def test_roster_cli_zero_detected_fails(tmp_path):
     p = tmp_path / "빈파일.txt"
     p.write_text("아무 명단도 없는 문서입니다.\n", encoding="utf-8")
@@ -195,6 +216,27 @@ def test_mask_cli_leak_blocks_save(tmp_path):
     proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
     assert proc.returncode == 1
     assert not out.exists()
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+
+
+def test_mask_cli_unissued_ids_message_includes_count_without_pii(tmp_path):
+    """매핑 없는 학번이 여러 건이면 건수를 밝히되 학번 값 자체는 출력하지 않는다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    input_json = tmp_path / "입력.json"
+    input_json.write_text(json.dumps({"items": [
+        {"학번": "10102", "본문": "발표를 준비함."},
+        {"학번": "10103", "본문": "토론에 참여함."},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    out = tmp_path / "토큰본.json"
+    proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "매핑(토큰)이 없는 학번 2건" in proc.stdout
+    assert "명렬 인식에서 누락되었을 수 있습니다" in proc.stdout
     assert_no_pii(proc.stdout)
     assert_no_pii(proc.stderr)
 

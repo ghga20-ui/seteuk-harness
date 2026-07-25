@@ -13,7 +13,11 @@ import secrets
 from pathlib import Path
 
 STUDENT_ID = re.compile(r"\b\d{5}\b")
-KOREAN_NAME = re.compile(r"^[가-힣]{2,4}$")
+# 패턴 경로(헤더 없음) 전용 — 추측이므로 오탐 방지가 우선이라 형식을 엄격히 본다.
+# {2,4} -> {2,8}: 다문화 성명(예: 응우옌티탄흐엉, 7자)을 놓치지 않기 위해 넓혔다.
+# 패턴 경로는 이미 확인필요=True가 붙으므로 사용자 확인으로 오탐을 보완한다.
+KOREAN_NAME = re.compile(r"^[가-힣]{2,8}$")
+MAX_HEADER_NAME_LEN = 20  # 헤더 경로(이름 열이 명시된 경우)의 과도한 길이 방지용 상한선
 
 
 def _rows_from_xlsx(path):
@@ -46,8 +50,20 @@ def _find_header_indices(rows):
 
 
 def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx):
-    """헤더 행의 열 인덱스를 사용해 (학번, 이름) 쌍을 추출."""
+    """헤더 행의 열 인덱스를 사용해 (학번, 이름) 쌍을 추출.
+
+    헤더가 "이름"이라고 명시적으로 지목한 열이므로 이름 형식(한글 2~4자 등)을
+    검사하지 않는다 — 형식 검사는 헤더 없이 추측하는 패턴 경로에만 필요하다.
+    이 검사 때문에 다문화 성명(응우옌티탄흐엉), 공백 포함 이름(박 서준), 영문
+    이름(Nguyen), 1자 이름(봄) 등 실재하는 학생이 명렬에서 조용히 누락되는
+    버그가 있었다. 이름은 비어 있지 않고 과도하게 길지 않으면 그대로 채택한다.
+    학번은 헤더가 지목한 열이므로 숫자인지만 느슨히 확인한다.
+
+    학번·이름 중 하나만 비어 있는 데이터 행은 건너뛰고 건너뛴 행 수를 함께
+    반환한다(둘 다 비어 있는 완전한 공백 행은 집계하지 않는다).
+    """
     pairs, seen = [], set()
+    skipped = 0
     for i, row in enumerate(rows):
         if i == header_row_idx:  # 헤더 행 자체는 데이터에서 제외
             continue
@@ -56,17 +72,18 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx):
             continue
         sid = row[id_idx]
         name = row[name_idx]
-        # 학번이 5자리 숫자, 이름이 한글 2~4자 확인
-        if (
-            sid
-            and STUDENT_ID.fullmatch(sid)
-            and name
-            and KOREAN_NAME.fullmatch(name)
-            and sid not in seen
-        ):
-            seen.add(sid)
-            pairs.append({"학번": sid, "이름": name})
-    return pairs
+        if not sid and not name:
+            continue  # 완전히 빈 행은 건너뜀 집계 대상이 아니다
+        sid_ok = bool(sid) and sid.isdigit()
+        name_ok = bool(name) and len(name) <= MAX_HEADER_NAME_LEN
+        if not (sid_ok and name_ok):
+            skipped += 1
+            continue
+        if sid in seen:
+            continue
+        seen.add(sid)
+        pairs.append({"학번": sid, "이름": name})
+    return pairs, skipped
 
 
 def _pairs_from_rows_pattern(rows):
@@ -95,12 +112,15 @@ def detect_roster(path) -> dict:
 
     if id_idx is not None and name_idx is not None:
         # 헤더 기반 추출
-        students = _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx)
+        students, skipped = _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx)
         if not students:
             방식 = "실패"
         else:
             방식 = "표헤더"
-        return {"students": students, "출처": str(path), "방식": 방식, "확인필요": False}
+        return {
+            "students": students, "출처": str(path), "방식": 방식,
+            "확인필요": False, "건너뜀": skipped,
+        }
     else:
         # 헤더가 없으므로 패턴 기반 추출 (낮은 신뢰도)
         students = _pairs_from_rows_pattern(rows)
@@ -108,7 +128,10 @@ def detect_roster(path) -> dict:
             방식 = "실패"
         else:
             방식 = "패턴"
-        return {"students": students, "출처": str(path), "방식": 방식, "확인필요": True}
+        return {
+            "students": students, "출처": str(path), "방식": 방식,
+            "확인필요": True, "건너뜀": 0,
+        }
 
 
 def issue_tokens(roster: dict, submitted_ids, existing: dict | None = None) -> dict:
@@ -348,6 +371,9 @@ def _cmd_roster(args) -> int:
     print(f"명렬 인식: {n}명 (방식: {roster.get('방식', '?')}). 이름은 출력하지 않습니다.")
     if roster.get("확인필요"):
         print("확인필요: 표 헤더를 찾지 못해 패턴으로 추정한 결과입니다. 원본 표를 확인해 주세요.")
+    skipped = roster.get("건너뜀", 0)
+    if skipped > 0:
+        print(f"경고: {skipped}개 행을 건너뛰었습니다(학번 또는 이름이 비어 있음). 명단을 확인해 주세요.")
     return 0
 
 
@@ -378,15 +404,25 @@ def _cmd_mask(args) -> int:
     roster = _read_json(args.roster)
     mapping = _read_json(args.mapping)
 
+    items = data.get("items", [])
+    missing = sum(
+        1 for item in items
+        if mapping.get("map", {}).get(str(item.get("학번", ""))) is None
+    )
+    if missing > 0:
+        # 학번 값 자체는 출력하지 않는다(계약 유지) — 건수만으로 원인을 짚어준다.
+        # 명렬 인식 단계에서 이름 형식 오탐으로 학생이 누락됐을 가능성을 안내한다.
+        print(
+            f"가명화 중단: 매핑(토큰)이 없는 학번 {missing}건. "
+            "명렬 인식에서 누락되었을 수 있습니다 — roster 출력의 인원수를 확인하세요."
+        )
+        return 1
+
     out_items = []
     total_warnings = 0
-    for item in data.get("items", []):
+    for item in items:
         sid = str(item.get("학번", ""))
-        token = mapping.get("map", {}).get(sid)
-        if token is None:
-            print("가명화 중단: 입력 항목에 매핑(토큰)이 없는 학번이 있습니다. "
-                  "issue 명령을 먼저 실행해 토큰을 발급하세요.")
-            return 1
+        token = mapping["map"][sid]
         text, warnings = pseudonymize_text(item.get("본문", ""), roster, mapping)
         total_warnings += len(warnings)
         out_items.append({"토큰": token, "본문": text})
