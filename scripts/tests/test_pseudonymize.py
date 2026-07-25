@@ -187,3 +187,44 @@ def test_pseudonymize_over_redaction_is_reported_as_warning():
     out, warnings = pseudonymize_text("김가상이해력이 뛰어나다.", ROSTER, mapping)
     assert "김가상" not in out
     assert warnings  # 치환 사실이 보고됨
+
+
+from pseudonymize import scan_leak, scan_token_residue, scan_id_in_narrative
+
+
+def _codes(issues):
+    return [(lv, code) for lv, code, _ in issues]
+
+
+def test_scan_leak_flags_student_id_as_fail_everywhere():
+    for scope in ("구조", "본문"):
+        issues = scan_leak("10101 학생의 감상문", ROSTER, scope=scope)
+        assert ("FAIL", "ID_LEAK") in _codes(issues)
+
+
+def test_scan_leak_name_is_fail_in_structured_field():
+    issues = scan_leak("김가상", ROSTER, scope="구조")
+    assert ("FAIL", "NAME_LEAK") in _codes(issues)
+
+
+def test_scan_leak_name_is_warn_in_body():
+    issues = scan_leak("김가상과 함께 조사함.", ROSTER, scope="본문")
+    assert ("WARN", "NAME_LEAK") in _codes(issues)
+    assert not any(lv == "FAIL" for lv, _ in _codes(issues))
+
+
+def test_scan_leak_clean_text_has_no_issues():
+    assert scan_leak("봄을 노래한 시를 분석함.", ROSTER, scope="본문") == []
+
+
+def test_scan_token_residue_detects_leftover_tokens():
+    assert scan_token_residue("S-3F7A 학생은 분석함.") == ["S-3F7A"]
+    assert scan_token_residue("학생은 분석함.") == []
+
+
+def test_scan_id_in_narrative_finds_bare_student_id():
+    assert scan_id_in_narrative("10101은 감상문을 작성함.", ROSTER) == ["10101"]
+
+
+def test_scan_id_in_narrative_ignores_unrelated_numbers():
+    assert scan_id_in_narrative("101010번 자료를 읽고 2026년을 언급함.", ROSTER) == []

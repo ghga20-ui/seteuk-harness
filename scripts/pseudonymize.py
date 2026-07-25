@@ -155,3 +155,44 @@ def reidentify(text: str, mapping: dict) -> str:
         # 토큰도 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
         out = re.sub(rf"(?<!\d){re.escape(token)}(?!\d)", sid, out)
     return out
+
+
+TOKEN_PATTERN = re.compile(r"\bS-[0-9A-F]{4}\b")
+
+
+def scan_leak(text: str, roster: dict, scope: str = "구조"):
+    """LLM 전송 전후 텍스트에서 식별정보를 찾는다.
+
+    학번은 어디서 발견되든 FAIL(오탐이 없는 강한 신호).
+    이름은 구조 필드에서만 FAIL이고 본문에서는 WARN이다 — 일반명사와 겹치는
+    이름('봄' 등)은 원리적으로 100% 탐지가 불가능하므로 게이트로 삼지 않는다.
+    """
+    issues: list[tuple[str, str, str]] = []
+    for sid in {str(s.get("학번", "")) for s in roster.get("students", [])}:
+        if sid and sid in text:
+            issues.append(("FAIL", "ID_LEAK", f"학번 {sid} 노출"))
+    level = "FAIL" if scope == "구조" else "WARN"
+    for name in {s.get("이름", "") for s in roster.get("students", [])}:
+        if name and name in text:
+            issues.append((level, "NAME_LEAK", f"이름 '{name}' 노출({scope})"))
+    return issues
+
+
+def scan_token_residue(text: str) -> list[str]:
+    """최종 산출물에 남은 토큰을 찾는다(재결합 누락 감지)."""
+    return TOKEN_PATTERN.findall(text)
+
+
+def scan_id_in_narrative(text: str, roster: dict) -> list[str]:
+    """최종 서술문에 학번이 그대로 남아 있는지 찾는다.
+
+    재결합은 토큰을 학번으로 되돌리므로, 본문 이름 자리에 있던 토큰이
+    학번 숫자로 복원되어 문장에 남을 수 있다. 토큰 잔존 검사로는 잡히지
+    않으므로(S-XXXX가 이미 사라진 상태) 별도로 검사한다.
+    """
+    found: list[str] = []
+    for student in roster.get("students", []):
+        sid = str(student.get("학번", ""))
+        if sid and re.search(rf"(?<!\d){re.escape(sid)}(?!\d)", text):
+            found.append(sid)
+    return found
