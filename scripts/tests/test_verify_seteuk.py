@@ -5,7 +5,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from verify_seteuk import check_text, find_name_intrusions, save_xlsx, verify_drafts
+from verify_seteuk import (
+    autofill_subjects,
+    check_text,
+    extract_subject,
+    find_name_intrusions,
+    save_xlsx,
+    verify_drafts,
+)
 
 PROFILE = {"활동명": "가상 활동", "문두": "가상 활동에서", "목표바이트": 700, "상한바이트": 760,
            "평가자료": "가상 채점표(테스트)"}
@@ -255,6 +262,81 @@ def test_cli_no_save_no_roster_still_allowed(tmp_path):
     proc = _run_cli(tmp_path, make_drafts())
     assert proc.returncode == 0
     assert "NO_ROSTER" in proc.stdout
+
+
+def test_extract_subject_from_first_quote():
+    text = "소설 비평하기 활동에서 '노인과 바다(헤밍웨이)'를 선정하여 서술 기법을 분석함."
+    assert extract_subject(text) == "노인과 바다(헤밍웨이)"
+
+
+def test_extract_subject_takes_first_quote_only():
+    text = "'첫번째 작품'과 '두번째 작품'을 비교하여 분석함."
+    assert extract_subject(text) == "첫번째 작품"
+
+
+def test_extract_subject_no_quote_returns_empty():
+    text = "빈 답안으로 처리되어 별도 기록 없음."
+    assert extract_subject(text) == ""
+
+
+def test_extract_subject_unclosed_quote_returns_empty_no_exception():
+    text = "가상 활동에서 '닫히지 않은 작품명을 계속 서술함."
+    assert extract_subject(text) == ""
+
+
+def test_autofill_subjects_fills_empty_and_counts():
+    drafts = make_drafts(text="소설 비평하기 활동에서 '노인과 바다(헤밍웨이)'를 선정하여 분석함.")
+    drafts["classes"][0]["students"][0]["핵심소재"] = ""
+    filled, blank = autofill_subjects(drafts)
+    assert filled == 1
+    assert blank == 0
+    assert drafts["classes"][0]["students"][0]["핵심소재"] == "노인과 바다(헤밍웨이)"
+
+
+def test_autofill_subjects_leaves_existing_value_untouched():
+    drafts = make_drafts()
+    drafts["classes"][0]["students"][0]["핵심소재"] = "교사가 채운 값"
+    filled, blank = autofill_subjects(drafts)
+    assert filled == 0
+    assert blank == 0
+    assert drafts["classes"][0]["students"][0]["핵심소재"] == "교사가 채운 값"
+
+
+def test_autofill_subjects_blank_stays_blank_when_no_quote():
+    drafts = make_drafts(text="예외 처리된 빈 답안으로 별도 서술 없음.", exempt=True)
+    drafts["classes"][0]["students"][0]["핵심소재"] = ""
+    filled, blank = autofill_subjects(drafts)
+    assert filled == 0
+    assert blank == 1
+    assert drafts["classes"][0]["students"][0]["핵심소재"] == ""
+
+
+def test_cli_save_autofills_subject_column_and_reports_without_names(tmp_path):
+    """저장 시 빈 핵심소재를 세특 첫 작품명으로 채우고, 요약 줄에 이름·학번이 없어야 한다."""
+    from openpyxl import load_workbook
+
+    drafts = make_drafts()
+    drafts["classes"][0]["students"][0]["핵심소재"] = ""
+    drafts_path = tmp_path / "d.json"
+    profile_path = tmp_path / "p.json"
+    roster_path = tmp_path / "r.json"
+    out = tmp_path / "out.xlsx"
+    drafts_path.write_text(json.dumps(drafts, ensure_ascii=False), encoding="utf-8")
+    profile_path.write_text(json.dumps(PROFILE, ensure_ascii=False), encoding="utf-8")
+    roster_path.write_text(json.dumps(ROSTER, ensure_ascii=False), encoding="utf-8")
+    script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
+    proc = subprocess.run(
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
+         "--roster", str(roster_path), "--save", str(out)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 0
+    summary_lines = [ln for ln in proc.stdout.splitlines() if "핵심소재 자동 기입" in ln]
+    assert summary_lines == ["핵심소재 자동 기입: 1명(빈칸 0명은 그대로)."]
+    assert "김가상" not in summary_lines[0]
+    assert "10101" not in summary_lines[0]
+    ws = load_workbook(str(out))["1반"]
+    assert ws["C2"].value == "가상의 책(작가)"
 
 
 def test_cli_handles_bom_prefixed_json_inputs(tmp_path):

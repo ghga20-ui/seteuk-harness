@@ -36,6 +36,44 @@ def load_rules(path=RULES_PATH) -> dict:
 
 
 RULES = load_rules()
+FIRST_QUOTED = re.compile(r"'([^']*)'")
+
+
+def extract_subject(text: str) -> str:
+    """세특 본문에서 첫 번째 작은따옴표 안 내용(작품명)을 추출한다.
+
+    세특 규칙상 작은따옴표는 작품명 표기 전용이므로 첫 '…' 안 내용이 곧 작품명이다.
+    작은따옴표가 없거나 닫히지 않으면(예외 처리된 빈 답안 등) 빈 문자열을 반환한다.
+    중첩·비정상 따옴표가 있어도 첫 쌍만 취하고 예외를 내지 않는다.
+    """
+    if not text:
+        return ""
+    match = FIRST_QUOTED.search(text)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def autofill_subjects(drafts: dict) -> tuple[int, int]:
+    """핵심소재가 빈 학생에 한해 세특 본문 첫 작품명으로 채운다.
+
+    이미 값이 있으면(교사가 채운 값 포함) 절대 덮어쓰지 않는다.
+    반환값: (채운 인원수, 시도했으나 빈칸으로 남은 인원수).
+    """
+    filled = 0
+    blank = 0
+    for cls in drafts.get("classes", []):
+        for student in cls.get("students", []):
+            existing = str(student.get("핵심소재", "") or "").strip()
+            if existing:
+                continue
+            subject = extract_subject(student.get("세특", ""))
+            if subject:
+                student["핵심소재"] = subject
+                filled += 1
+            else:
+                blank += 1
+    return filled, blank
 
 
 def check_text(text: str, profile: dict, exempt: bool = False, rules: dict | None = None):
@@ -230,6 +268,9 @@ def main(argv=None) -> int:
         return 1
     if args.save:
         import os
+
+        filled, blank = autofill_subjects(drafts)
+        print(f"핵심소재 자동 기입: {filled}명(빈칸 {blank}명은 그대로).")
 
         tmp_path = args.save + ".tmp"
         try:
