@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import secrets
 from pathlib import Path
@@ -196,3 +197,34 @@ def scan_id_in_narrative(text: str, roster: dict) -> list[str]:
         if sid and re.search(rf"(?<!\d){re.escape(sid)}(?!\d)", text):
             found.append(sid)
     return found
+
+
+MAPPING_GLOB = "매핑*.json"
+
+
+def save_mapping(mapping: dict, path) -> None:
+    """매핑표를 로컬에 저장한다. 이 파일은 가명처리의 '추가 정보'이므로 로컬 전용이다."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, ensure_ascii=False, indent=1)
+
+
+def load_mapping(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def destroy_mapping(path) -> bool:
+    """지정 경로의 매핑표를 파기한다. 파기 = 파일 부존재 확인 수준."""
+    path = Path(path)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def detect_stale_mapping(dir_path) -> list:
+    """이전 실행이 비정상 종료돼 남은 매핑표를 찾는다(실행 전 점검용)."""
+    return sorted(Path(dir_path).glob(MAPPING_GLOB))

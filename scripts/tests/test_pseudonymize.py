@@ -243,3 +243,32 @@ def test_scan_id_in_narrative_finds_bare_student_id():
 
 def test_scan_id_in_narrative_ignores_unrelated_numbers():
     assert scan_id_in_narrative("101010번 자료를 읽고 2026년을 언급함.", ROSTER) == []
+
+
+from pseudonymize import save_mapping, load_mapping, destroy_mapping, detect_stale_mapping
+
+
+def test_save_and_load_mapping_roundtrip(tmp_path):
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    p = tmp_path / "매핑.json"
+    save_mapping(mapping, p)
+    assert load_mapping(p)["map"] == mapping["map"]
+
+
+def test_destroy_mapping_removes_file(tmp_path):
+    p = tmp_path / "매핑.json"
+    save_mapping(issue_tokens(ROSTER, submitted_ids=["10101"]), p)
+    assert destroy_mapping(p) is True
+    assert not p.exists()
+    assert destroy_mapping(p) is False
+
+
+def test_detect_stale_mapping_finds_leftovers(tmp_path):
+    save_mapping(issue_tokens(ROSTER, submitted_ids=["10101"]), tmp_path / "매핑.json")
+    stale = detect_stale_mapping(tmp_path)
+    assert len(stale) == 1
+    assert stale[0].name == "매핑.json"
+
+
+def test_detect_stale_mapping_empty_when_clean(tmp_path):
+    assert detect_stale_mapping(tmp_path) == []
