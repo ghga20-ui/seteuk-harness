@@ -167,7 +167,7 @@ def test_detect_roster_pattern_mode_recognizes_long_korean_names(tmp_path):
     assert roster["students"][0]["이름"] == "응우옌티탄흐엉"
 
 
-from pseudonymize import issue_tokens, pseudonymize_text, reidentify
+from pseudonymize import issue_tokens, pseudonymize_text, reidentify, SHORT_NAME_WARNING
 
 ROSTER = {"students": [
     {"학번": "10101", "이름": "김가상"},
@@ -259,11 +259,17 @@ def test_pseudonymize_roundtrip_preserves_unrelated_numbers():
 
 
 def test_pseudonymize_masks_name_glued_to_previous_word():
-    """앞 단어에 붙은 이름도 반드시 치환된다(과소탐 방지 — 개인정보 누락이 최악)."""
+    """앞 단어에 붙은 이름도 반드시 치환된다(과소탐 방지 — 개인정보 누락이 최악).
+
+    갱신 사유: owner_id 없이 호출하는 구버전 호환 경로는 이제 명렬 이름을
+    "자기 토큰"이 아니라 항상 중립어 "급우"로 치환한다(남의 토큰이 본문에
+    박히는 오귀속 경로를 없애는 정책 변경). 이 테스트는 원래 치환 자체가
+    일어나는지를 검증하려는 목적이었으므로, 기대값을 토큰에서 "급우"로 갱신한다.
+    """
     mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
     out, warnings = pseudonymize_text("급우김가상은 발표를 잘했다.", ROSTER, mapping)
     assert "김가상" not in out
-    assert mapping["map"]["10101"] in out
+    assert "급우" in out
     assert warnings
 
 
@@ -284,6 +290,70 @@ def test_pseudonymize_replaces_non_submitter_name_with_neutral_word():
     assert "박미정" not in out
     assert "급우" in out
     assert any("박미정" in w and "급우" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# 재현된 실제 버그 #1(심각) — 동명이인일 때 본문의 자기 이름이 남의 토큰이 됨.
+# 30105, 30110 두 명 모두 "이서준"인 골든 명렬 재현. owner_id를 넘기면 각자의
+# 글에서 자기 이름은 반드시 자기 토큰이 되어야 하고, 절대 남의 토큰이 되면
+# 안 된다(오귀속은 이 프로젝트가 정의한 최악의 실패).
+# ---------------------------------------------------------------------------
+
+DUP_NAME_ROSTER = {"students": [
+    {"학번": "30105", "이름": "이서준"},
+    {"학번": "30110", "이름": "이서준"},
+]}
+
+
+def test_pseudonymize_duplicate_names_each_get_own_token_via_owner_id():
+    mapping = issue_tokens(DUP_NAME_ROSTER, submitted_ids=["30105", "30110"])
+    token_a = mapping["map"]["30105"]
+    token_b = mapping["map"]["30110"]
+
+    out_a, _ = pseudonymize_text("이서준은 '나목'을 분석함.", DUP_NAME_ROSTER, mapping, owner_id="30105")
+    out_b, _ = pseudonymize_text(
+        "이서준. '아몬드(손원평)'를 선정했다", DUP_NAME_ROSTER, mapping, owner_id="30110"
+    )
+
+    assert token_a in out_a
+    assert token_b not in out_a
+    assert token_b in out_b
+    assert token_a not in out_b
+
+
+def test_pseudonymize_other_students_name_becomes_neutral_not_token():
+    """본문에 등장한 남의 이름은 남의 토큰이 아니라 중립어 '급우'가 되어야 한다."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102"])
+    text = "이허구와 토론한 내용을 정리함."  # 10101의 글에 10102(이허구)가 언급됨
+    out, warnings = pseudonymize_text(text, ROSTER, mapping, owner_id="10101")
+    assert "이허구" not in out
+    assert mapping["map"]["10102"] not in out
+    assert "급우" in out
+    assert warnings
+
+
+# ---------------------------------------------------------------------------
+# 재현된 실제 버그 #2(품질 훼손) — 1자 이름('봄')이 작품명 '봄봄(김유정)'을 파괴함.
+# 1자 이름은 본문 치환 대상에서 제외하고 경고로만 남긴다.
+# ---------------------------------------------------------------------------
+
+SHORT_NAME_ROSTER = {"students": [{"학번": "10104", "이름": "봄"}]}
+
+
+def test_pseudonymize_single_char_name_excluded_from_replacement_and_warned():
+    mapping = issue_tokens(SHORT_NAME_ROSTER, submitted_ids=["10104"])
+    text = "봄이라는 계절을 다룬 시를 분석함."
+    out, warnings = pseudonymize_text(text, SHORT_NAME_ROSTER, mapping)
+    assert out == text  # 1자 이름은 치환되지 않는다
+    assert any(w == SHORT_NAME_WARNING for w in warnings)  # 경고 카운트에는 잡힌다
+
+
+def test_pseudonymize_single_char_name_preserves_unrelated_work_title():
+    """1자 이름이 있어도 작품명 '봄봄(김유정)'은 온전히 보존되어야 한다(품질 회귀)."""
+    mapping = issue_tokens(SHORT_NAME_ROSTER, submitted_ids=["10104"])
+    text = "'봄봄(김유정)'을 선정하여 해학성을 분석함."
+    out, _ = pseudonymize_text(text, SHORT_NAME_ROSTER, mapping)
+    assert "봄봄(김유정)" in out
 
 
 from pseudonymize import scan_leak, scan_token_residue, scan_id_in_narrative

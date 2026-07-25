@@ -259,6 +259,73 @@ def test_mask_cli_unissued_own_id_fails_closed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# mask — owner_id 정책(동명이인 오귀속 차단, 1자 이름 경고) CLI 레벨 검증
+# ---------------------------------------------------------------------------
+
+def test_mask_cli_duplicate_names_each_item_gets_own_token(tmp_path):
+    """동명이인 골든 재현: mask가 owner_id를 넘겨 각 항목의 주인 이름만 주인
+    토큰이 되고, 절대 남의 토큰이 되지 않아야 한다(오귀속 회귀 방지)."""
+    roster = {"students": [
+        {"학번": "30105", "이름": "이서준"},
+        {"학번": "30110", "이름": "이서준"},
+    ]}
+    roster_path = tmp_path / "명렬.json"
+    roster_path.write_text(json.dumps(roster, ensure_ascii=False), encoding="utf-8")
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["30105", "30110"])
+    token_a = mapping["map"]["30105"]
+    token_b = mapping["map"]["30110"]
+
+    input_json = tmp_path / "입력.json"
+    input_json.write_text(json.dumps({"items": [
+        {"학번": "30105", "본문": "이서준은 '나목'을 분석함."},
+        {"학번": "30110", "본문": "이서준. '아몬드(손원평)'를 선정했다"},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    out = tmp_path / "토큰본.json"
+    proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    body_a = next(item["본문"] for item in saved["items"] if item["토큰"] == token_a)
+    body_b = next(item["본문"] for item in saved["items"] if item["토큰"] == token_b)
+
+    assert token_a in body_a
+    assert token_b not in body_a
+    assert token_b in body_b
+    assert token_a not in body_b
+    assert "이서준" not in body_a and "이서준" not in body_b
+
+
+def test_mask_cli_single_char_name_warns_without_leaking_name_value(tmp_path):
+    """1자 이름('봄')이 있어도 작품명이 보존되고, 경고는 나오되 이름 값 자체는
+    stdout에 등장하지 않아야 한다."""
+    roster = {"students": [
+        {"학번": "10104", "이름": "봄"},
+        {"학번": "10105", "이름": "한소율"},
+    ]}
+    roster_path = tmp_path / "명렬.json"
+    roster_path.write_text(json.dumps(roster, ensure_ascii=False), encoding="utf-8")
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10104", "10105"])
+
+    input_json = tmp_path / "입력.json"
+    input_json.write_text(json.dumps({"items": [
+        {"학번": "10104", "본문": "'봄봄(김유정)'을 선정하여 해학성을 분석함."},
+        {"학번": "10105", "본문": "'봄봄(김유정)'에 나타난 해학성을 다룸."},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    out = tmp_path / "토큰본.json"
+    proc = run("mask", str(input_json), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    for item in saved["items"]:
+        assert "봄봄(김유정)" in item["본문"]
+
+    assert "1자 이름" in proc.stdout
+    assert "봄" not in proc.stdout
+    assert "한소율" not in proc.stdout
+    assert_no_pii(proc.stderr)
+
+
+# ---------------------------------------------------------------------------
 # finalize
 # ---------------------------------------------------------------------------
 

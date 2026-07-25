@@ -152,31 +152,65 @@ def issue_tokens(roster: dict, submitted_ids, existing: dict | None = None) -> d
     return mapping
 
 
-def pseudonymize_text(text: str, roster: dict, mapping: dict):
-    """학번과 명렬 이름을 토큰으로 치환한다. 본문 이름 치환은 경고로 보고한다."""
+SHORT_NAME_WARNING = "1자 이름은 일반명사 충돌 위험으로 본문 치환에서 제외함"
+
+
+def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
+    """학번과 명렬 이름을 토큰으로 치환한다. 본문 이름 치환은 경고로 보고한다.
+
+    동명이인 오귀속 방지: 명렬 이름을 다른 학생의 토큰으로 치환하지 않는다.
+    - owner_id가 주어지면(그 본문의 주인 학번), 그 학번의 이름만 그 학번의
+      "자기 토큰"으로 치환한다. 그 외 명렬 이름(동명이인 포함)은 절대 남의
+      토큰이 아니라 중립어 "급우"로 치환한다.
+    - owner_id가 없으면(기존 호출부 호환) 명렬 이름은 전부 "급우"로 치환한다
+      — 남의 토큰이 본문에 박히는 경로를 완전히 없앤다.
+
+    1자 이름은 일반명사와 충돌할 위험이 압도적이므로(실제 명렬의 전체 이름은
+    2자 이상) 본문 치환 대상에서 제외하고, 제외 사실만 경고에 남긴다(이름 값
+    자체는 경고 문자열에 남기지 않는다 — SHORT_NAME_WARNING은 고정 문구다).
+    """
     warnings: list[str] = []
     out = text
+    owner_id = str(owner_id) if owner_id is not None else None
+
     for sid, token in mapping.get("map", {}).items():
-        # 학번은 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
+        # 학번은 고유 식별자라 동명이인 같은 오귀속 위험이 없다 — 항상 자기 토큰으로.
+        # 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
         out = re.sub(rf"(?<!\d){re.escape(sid)}(?!\d)", token, out)
-    for student in roster.get("students", []):
+
+    students = roster.get("students", [])
+    if owner_id is not None:
+        # 주인 학생의 명렬 항목을 먼저 처리해, 동명이인이 있어도 주인 이름이
+        # 남의 급우 치환에 먼저 소비되지 않고 반드시 자기 토큰을 받도록 한다.
+        students = sorted(students, key=lambda s: str(s.get("학번", "")) != owner_id)
+
+    for student in students:
         name = student.get("이름", "")
         sid = str(student.get("학번", ""))
         if not name or name not in out:
             continue
-        token = mapping.get("map", {}).get(sid)
-        # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
-        # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
-        # 과탐 가능성(긴 단어 내 포함)은 경고로 교사에게 보고
-        if token:
-            out, count = re.subn(re.escape(name), token, out)
-            if count > 0:
-                warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
-        else:
-            # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
-            # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
-            out, count = re.subn(re.escape(name), "급우", out)
-            if count > 0:
+        if len(name) < 2:
+            # 1자 이름('봄' 등 일반명사와 충돌)은 치환하지 않는다 — 작품명 등
+            # 무관한 단어를 파괴하는 것이 실명 노출보다 더 심각한 품질 훼손이다.
+            warnings.append(SHORT_NAME_WARNING)
+            continue
+        if owner_id is not None and sid == owner_id:
+            token = mapping.get("map", {}).get(sid)
+            # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
+            # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
+            if token:
+                out, count = re.subn(re.escape(name), token, out)
+                if count > 0:
+                    warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
+            continue
+        # 자신이 아닌 명렬 이름(동명이인 포함) — 남의 토큰이 아니라 중립어로 치환
+        out, count = re.subn(re.escape(name), "급우", out)
+        if count > 0:
+            if mapping.get("map", {}).get(sid) is not None:
+                warnings.append(f"본문에서 급우 이름 '{name}'을 급우로 치환함(학번 {sid}, {count}회)")
+            else:
+                # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
+                # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
                 warnings.append(f"본문에서 미제출자 이름 '{name}'을 급우로 치환함")
     return out, warnings
 
@@ -485,11 +519,13 @@ def _cmd_mask(args) -> int:
 
     out_items = []
     total_warnings = 0
+    short_name_warnings = 0
     for item in items:
         sid = str(item.get("학번", ""))
         token = mapping["map"][sid]
-        text, warnings = pseudonymize_text(item.get("본문", ""), roster, mapping)
+        text, warnings = pseudonymize_text(item.get("본문", ""), roster, mapping, owner_id=sid)
         total_warnings += len(warnings)
+        short_name_warnings += sum(1 for w in warnings if w == SHORT_NAME_WARNING)
         out_items.append({"토큰": token, "본문": text})
 
     leak_count = 0
@@ -503,6 +539,11 @@ def _cmd_mask(args) -> int:
 
     _write_json({"items": out_items}, args.out)
     print(f"가명화: {len(out_items)}건 처리, 본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건.")
+    if short_name_warnings > 0:
+        print(
+            f"경고: 1자 이름 {short_name_warnings}건은 본문 치환에서 제외했습니다(일반명사 충돌 위험). "
+            "명렬의 이름 열이 성을 포함한 전체 이름인지 확인해 주세요."
+        )
     return 0
 
 
@@ -547,13 +588,15 @@ def _cmd_memo(args) -> int:
     out_items = []
     excluded = 0
     total_warnings = 0
+    short_name_warnings = 0
     for sid, memo in pairs:
         token = mapping.get("map", {}).get(str(sid))
         if token is None:
             excluded += 1
             continue
-        text, warnings = pseudonymize_text(memo, roster, mapping)
+        text, warnings = pseudonymize_text(memo, roster, mapping, owner_id=str(sid))
         total_warnings += len(warnings)
+        short_name_warnings += sum(1 for w in warnings if w == SHORT_NAME_WARNING)
         out_items.append({"토큰": token, "메모": text})
 
     leak_count = 0
@@ -577,6 +620,11 @@ def _cmd_memo(args) -> int:
         f"관찰 메모: {len(out_items)}건 수집({excluded}건은 매핑 없음으로 제외). "
         f"본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건."
     )
+    if short_name_warnings > 0:
+        print(
+            f"경고: 1자 이름 {short_name_warnings}건은 본문 치환에서 제외했습니다(일반명사 충돌 위험). "
+            "명렬의 이름 열이 성을 포함한 전체 이름인지 확인해 주세요."
+        )
     return 0
 
 
