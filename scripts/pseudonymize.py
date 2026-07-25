@@ -73,6 +73,21 @@ def _sub_given_name_with_suffix(text: str, given: str, replacement: str):
     return pattern.subn(lambda m: replacement + m.group(2), text)
 
 
+def _cell_text(c) -> str:
+    """셀 값을 문자열로 만든다. 정수인 실수는 소수점을 떼어 학번을 살린다.
+
+    엑셀이 학번을 숫자 서식으로 저장하면(설문 응답 시트 등) 셀이 30101.0으로
+    들어와 str()이 "30101.0"이 되고 isdigit()이 False가 되어 행 전체가 버려졌다.
+    실측에서 건너뛴 947행 중 441행(46.6%)이 이 한 가지 원인이었다.
+    3.5 같은 진짜 소수는 그대로 둔다 — 점수 열이 훼손되면 안 된다.
+    """
+    if c is None:
+        return ""
+    if isinstance(c, float) and c.is_integer():
+        return str(int(c))
+    return str(c).strip()
+
+
 def _rows_from_xlsx(path):
     from openpyxl import load_workbook
 
@@ -80,7 +95,7 @@ def _rows_from_xlsx(path):
     rows = []
     for ws in wb.worksheets:
         for row in ws.iter_rows(values_only=True):
-            rows.append(["" if c is None else str(c).strip() for c in row])
+            rows.append([_cell_text(c) for c in row])
     wb.close()
     return rows
 
@@ -144,10 +159,18 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx, surnam
     반환한다(둘 다 비어 있는 완전한 공백 행은 집계하지 않는다). 이름 칸이
     상태 표기어(자퇴 등)인 행도 학생이 아니므로 건너뜀에 포함한다 — 반환값에
     상태 표기로 건너뛴 건수를 별도로 함께 돌려준다(안내 문구 분기용).
+
+    학번이 앞 행과 겹치는 행은 채택하지 않고 중복 건수로 따로 센다. '번호'
+    열(출석번호)을 학번으로 쓰는 표는 반이 바뀔 때마다 번호가 되풀이되므로
+    이 경로로 대량의 행이 사라진다 — 실측에서 738행짜리 표가 32명으로,
+    805행이 38명으로 보고됐다. 세지 않으면 교사가 알아챌 방법이 없다.
+
+    반환: (쌍 목록, 건너뜀, 상태표기건너뜀, 중복)
     """
     pairs, seen = [], set()
     skipped = 0
     status_skipped = 0
+    duplicate = 0
     for i, row in enumerate(rows):
         if i == header_row_idx:  # 헤더 행 자체는 데이터에서 제외
             continue
@@ -172,10 +195,11 @@ def _pairs_from_rows_with_indices(rows, id_idx, name_idx, header_row_idx, surnam
             status_skipped += 1
             continue
         if sid in seen:
+            duplicate += 1  # 조용히 버리면 738행이 32명이 된다 — 반드시 센다
             continue
         seen.add(sid)
         pairs.append({"학번": sid, "이름": name})
-    return pairs, skipped, status_skipped
+    return pairs, skipped, status_skipped, duplicate
 
 
 def _pairs_from_rows_pattern(rows):
@@ -192,29 +216,83 @@ def _pairs_from_rows_pattern(rows):
     return pairs
 
 
+def _looks_like_legacy_xls(path) -> bool:
+    """구형 .xls(OLE2 복합 문서)인지 매직바이트로 판정한다.
+
+    openpyxl은 .xls를 읽지 못하는데, 확장자만 보고 텍스트 경로로 보내면
+    바이너리가 깨진 문자열로 읽혀 예외도 없이 0명이 된다. 실측 코퍼스의
+    17.3%(59파일)가 여기 해당했고 전부 "0명"이라는 같은 얼굴로 나왔다.
+    """
+    try:
+        with open(path, "rb") as f:
+            return f.read(8) == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+    except OSError:
+        return False
+
+
+def _confirm_reasons(students, skipped, duplicate, id_label) -> list[str]:
+    """헤더 경로 결과에 확인이 필요한 사유를 모은다(없으면 빈 목록).
+
+    종전에는 헤더가 있으면 확인필요를 False로 박아 두었는데, 실측에서 나온
+    조용한 오답 52건이 전부 이 경로에서 나왔다 — 정의상 한 건도 잡을 수
+    없는 플래그였다. 사유를 계산해 붙이고, 깨끗한 표에는 붙이지 않는다.
+
+    건너뜀은 사유에 넣지 않는다. 빈 행은 정상 명렬에도 흔해서 사유로 삼으면
+    거의 모든 표에 딱지가 붙고, 늘 켜진 경고는 꺼진 경고만큼 쓸모없어진다.
+    건너뜀은 별도 경고로 이미 건수와 함께 안내된다.
+    """
+    reasons = []
+    if duplicate > 0:
+        reasons.append(
+            f"학번 중복으로 {duplicate}개 행을 채택하지 않았습니다. "
+            "출석번호를 학번으로 쓰는 표라면 여러 반이 한 반으로 합쳐졌을 수 있습니다."
+        )
+    if students and re.sub(r"\s+", "", id_label or "") == "번호":
+        reasons.append(
+            "'번호' 열을 학번으로 사용했습니다. 출석번호라면 학번이 아니므로 "
+            "학번 열이 따로 있는지 확인해 주세요."
+        )
+    return reasons
+
+
 def detect_roster(path) -> dict:
     """명단 파일에서 학번·이름 쌍을 감지한다. LLM을 거치지 않는 로컬 판정."""
     path = Path(path)
-    try:
-        rows = _rows_from_xlsx(path) if path.suffix.lower() == ".xlsx" else _rows_from_text(path)
-    except Exception:
+    읽기오류 = ""
+    if _looks_like_legacy_xls(path):
+        # 텍스트 경로로 보내면 OLE2 바이너리가 깨진 문자열로 읽혀 예외 없이 0명이 된다.
         rows = []
+        읽기오류 = "구형 .xls 형식은 읽을 수 없습니다. 엑셀에서 .xlsx로 다시 저장해 주세요."
+    else:
+        try:
+            rows = _rows_from_xlsx(path) if path.suffix.lower() == ".xlsx" else _rows_from_text(path)
+        except Exception as exc:
+            # 사유를 버리면 손상 파일·형식 미지원·학생 없음이 전부 "0명"으로 똑같이 보인다.
+            rows = []
+            읽기오류 = f"{type(exc).__name__}: {exc}"
 
     id_idx, name_idx, surname_idx, header_row_idx = _find_header_indices(rows)
 
     if id_idx is not None and name_idx is not None:
         # 헤더 기반 추출
-        students, skipped, status_skipped = _pairs_from_rows_with_indices(
+        students, skipped, status_skipped, duplicate = _pairs_from_rows_with_indices(
             rows, id_idx, name_idx, header_row_idx, surname_idx
         )
         if not students:
             방식 = "실패"
         else:
             방식 = "표헤더"
+        id_label = ""
+        if 0 <= header_row_idx < len(rows) and id_idx < len(rows[header_row_idx]):
+            id_label = rows[header_row_idx][id_idx]
+        확인사유 = _confirm_reasons(students, skipped, duplicate, id_label)
         result = {
             "students": students, "출처": str(path), "방식": 방식,
-            "확인필요": False, "건너뜀": skipped, "상태표기건너뜀": status_skipped,
+            "확인필요": bool(확인사유), "확인사유": 확인사유,
+            "건너뜀": skipped, "상태표기건너뜀": status_skipped, "중복": duplicate,
         }
+        if 읽기오류:
+            result["읽기오류"] = 읽기오류
         if surname_idx is not None:
             result["성이름결합"] = True
         return result
@@ -225,10 +303,15 @@ def detect_roster(path) -> dict:
             방식 = "실패"
         else:
             방식 = "패턴"
-        return {
+        result = {
             "students": students, "출처": str(path), "방식": 방식,
-            "확인필요": True, "건너뜀": 0,
+            "확인필요": True,
+            "확인사유": ["표 헤더를 찾지 못해 패턴으로 추정했습니다."],
+            "건너뜀": 0, "중복": 0,
         }
+        if 읽기오류:
+            result["읽기오류"] = 읽기오류
+        return result
 
 
 def issue_tokens(roster: dict, submitted_ids, existing: dict | None = None) -> dict:
@@ -911,15 +994,24 @@ def _cmd_roster(args) -> int:
     roster = detect_roster(args.input)
     n = len(roster.get("students", []))
     if n == 0:
-        print("명렬 인식: 0명. 학번·이름 두 열이 있는 표(엑셀) 또는 '학번 이름' 형식의 "
-              "텍스트로 다시 붙여넣어 주세요.")
+        읽기오류 = roster.get("읽기오류")
+        if 읽기오류:
+            # 0명의 원인을 밝히지 않으면 손상·미지원·빈 표가 구별되지 않는다.
+            print(f"명렬 인식: 0명. 파일을 읽지 못했습니다 — {읽기오류}")
+        else:
+            print("명렬 인식: 0명. 학번·이름 두 열이 있는 표(엑셀) 또는 '학번 이름' 형식의 "
+                  "텍스트로 다시 붙여넣어 주세요.")
         return 1
     _write_json(roster, args.out)
     print(f"명렬 인식: {n}명 (방식: {roster.get('방식', '?')}). 이름은 출력하지 않습니다.")
     if roster.get("성이름결합"):
         print("성 열과 이름 열을 합쳐 전체 이름으로 사용합니다.")
-    if roster.get("확인필요"):
-        print("확인필요: 표 헤더를 찾지 못해 패턴으로 추정한 결과입니다. 원본 표를 확인해 주세요.")
+    duplicate = roster.get("중복", 0)
+    if duplicate > 0:
+        print(f"경고: 학번 중복으로 {duplicate}개 행을 채택하지 않았습니다. "
+              f"원본의 학생 수가 {n}명이 맞는지 확인해 주세요.")
+    for reason in roster.get("확인사유", []):
+        print(f"확인필요: {reason}")
     skipped = roster.get("건너뜀", 0)
     if skipped > 0:
         msg = f"경고: {skipped}개 행을 건너뛰었습니다(학번 또는 이름이 비어 있음). 명단을 확인해 주세요."
