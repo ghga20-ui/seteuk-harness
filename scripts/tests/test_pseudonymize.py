@@ -94,3 +94,58 @@ def test_detect_roster_pattern_mode_flags_low_confidence(tmp_path):
     roster = detect_roster(path)
     assert roster["방식"] == "패턴"
     assert roster.get("확인필요") is True
+
+
+from pseudonymize import issue_tokens, pseudonymize_text, reidentify
+
+ROSTER = {"students": [
+    {"학번": "10101", "이름": "김가상"},
+    {"학번": "10102", "이름": "이허구"},
+    {"학번": "10103", "이름": "박미정"},
+]}
+
+
+def test_issue_tokens_skips_non_submitters():
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102"])
+    assert set(mapping["map"]) == {"10101", "10102"}
+    assert "10103" not in mapping["map"]
+
+
+def test_issue_tokens_are_unique_and_not_sequential():
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102", "10103"])
+    tokens = list(mapping["map"].values())
+    assert len(set(tokens)) == 3
+    assert tokens != sorted(tokens, key=lambda t: t)  # 순번 유추 방지: 학번 순 = 토큰 순이 아님
+    for t in tokens:
+        assert t.startswith("S-")
+
+
+def test_issue_tokens_reuses_existing_and_adds_new():
+    first = issue_tokens(ROSTER, submitted_ids=["10101"])
+    second = issue_tokens(ROSTER, submitted_ids=["10101", "10102"], existing=first)
+    assert second["map"]["10101"] == first["map"]["10101"]
+    assert "10102" in second["map"]
+
+
+def test_pseudonymize_replaces_ids_and_names():
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102"])
+    text = "10101 김가상 학생은 이허구와 함께 발표함."
+    out, warnings = pseudonymize_text(text, ROSTER, mapping)
+    assert "10101" not in out
+    assert "김가상" not in out
+    assert "이허구" not in out
+    assert mapping["map"]["10101"] in out
+    assert warnings  # 본문 이름 치환 경고
+
+
+def test_pseudonymize_leaves_unrelated_text_intact():
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    text = "봄이 오는 길목에서 희망을 노래함."
+    out, _ = pseudonymize_text(text, ROSTER, mapping)
+    assert out == text
+
+
+def test_reidentify_restores_student_ids():
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101", "10102"])
+    token = mapping["map"]["10102"]
+    assert reidentify(f"{token} 학생의 세특", mapping) == "10102 학생의 세특"

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 from pathlib import Path
 
 STUDENT_ID = re.compile(r"\b\d{5}\b")
@@ -105,3 +106,47 @@ def detect_roster(path) -> dict:
         else:
             방식 = "패턴"
         return {"students": students, "출처": str(path), "방식": 방식, "확인필요": True}
+
+
+def issue_tokens(roster: dict, submitted_ids, existing: dict | None = None) -> dict:
+    """제출자에게만 무작위 토큰을 발급한다. 순번이 아닌 난수여야 역추적이 어렵다."""
+    mapping = {"활동": (existing or {}).get("활동"), "map": dict((existing or {}).get("map", {}))}
+    submitted = {str(s) for s in submitted_ids}
+    used = set(mapping["map"].values())
+    for student in roster.get("students", []):
+        sid = str(student.get("학번", ""))
+        if sid not in submitted or sid in mapping["map"]:
+            continue
+        while True:
+            token = "S-" + secrets.token_hex(2).upper()
+            if token not in used:
+                break
+        used.add(token)
+        mapping["map"][sid] = token
+    return mapping
+
+
+def pseudonymize_text(text: str, roster: dict, mapping: dict):
+    """학번과 명렬 이름을 토큰으로 치환한다. 본문 이름 치환은 경고로 보고한다."""
+    warnings: list[str] = []
+    out = text
+    for sid, token in mapping.get("map", {}).items():
+        if sid in out:
+            out = out.replace(sid, token)
+    for student in roster.get("students", []):
+        name = student.get("이름", "")
+        sid = str(student.get("학번", ""))
+        token = mapping.get("map", {}).get(sid)
+        if not name or not token or name not in out:
+            continue
+        out = out.replace(name, token)
+        warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid})")
+    return out, warnings
+
+
+def reidentify(text: str, mapping: dict) -> str:
+    """토큰을 학번으로 되돌린다(로컬 재결합)."""
+    out = text
+    for sid, token in mapping.get("map", {}).items():
+        out = out.replace(token, sid)
+    return out
