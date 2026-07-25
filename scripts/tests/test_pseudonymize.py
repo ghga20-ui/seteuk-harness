@@ -497,3 +497,54 @@ def test_load_mapping_handles_bom(tmp_path):
     loaded = load_mapping(p)
     assert loaded is not None
     assert loaded["map"] == mapping["map"]
+
+
+def test_detect_stale_artifacts_finds_roster_memo_score_tokenbody(tmp_path):
+    """적대적 감사 FINDING 3: 명렬·관찰메모·점수·토큰본도 잔존 감지 대상이어야 한다."""
+    from pseudonymize import detect_stale_artifacts
+
+    (tmp_path / "매핑.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "명렬.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "관찰메모.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "점수.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "토큰본.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "무관.json").write_text("{}", encoding="utf-8")
+
+    found = {p.name for p in detect_stale_artifacts(tmp_path)}
+    assert found == {"매핑.json", "명렬.json", "관찰메모.json", "점수.json", "토큰본.json"}
+
+
+def test_detect_stale_mapping_alias_also_finds_roster():
+    """하위 호환: detect_stale_mapping도 명렬 등 확장된 대상을 함께 찾아야 한다."""
+    from pseudonymize import detect_stale_artifacts
+
+    assert detect_stale_mapping is detect_stale_artifacts
+
+
+def test_destroy_artifacts_removes_all_and_returns_names_no_pii(tmp_path, capsys):
+    """destroy_artifacts는 여러 산출물을 지우고 파일명 목록을 반환하되,
+    이름·학번 등 내용은 출력하지 않아야 한다(적대적 감사 FINDING 3)."""
+    import json
+
+    from pseudonymize import destroy_artifacts
+
+    (tmp_path / "매핑.json").write_text(
+        json.dumps(issue_tokens(ROSTER, submitted_ids=["10101"]), ensure_ascii=False), encoding="utf-8"
+    )
+    (tmp_path / "명렬.json").write_text(json.dumps(ROSTER, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "관찰메모.json").write_text(
+        json.dumps({"items": [{"토큰": "S-ABCD", "메모": "김가상은 성실함."}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    capsys.readouterr()  # 이전 캡처 비우기
+    destroyed = destroy_artifacts(tmp_path)
+    captured = capsys.readouterr()
+
+    assert set(destroyed) == {"매핑.json", "명렬.json", "관찰메모.json"}
+    assert not (tmp_path / "매핑.json").exists()
+    assert not (tmp_path / "명렬.json").exists()
+    assert not (tmp_path / "관찰메모.json").exists()
+    assert captured.out == ""
+    assert "김가상" not in captured.out
+    assert "10101" not in captured.out

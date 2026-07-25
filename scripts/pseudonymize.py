@@ -457,6 +457,11 @@ def _xlsx_is_empty(path) -> bool:
 
 MAPPING_GLOB = "매핑*.json"
 
+# 가명처리 파이프라인이 로컬에 남기는 모든 중간 산출물. 명렬(전체 학급 실명
+# 원장)도 매핑표와 마찬가지로 무기한 평문으로 남으면 안 되므로 파기·잔존
+# 감지 대상에 포함한다.
+SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수*.json", "토큰본*.json")
+
 
 def save_mapping(mapping: dict, path) -> None:
     """매핑표를 로컬에 저장한다. 이 파일은 가명처리의 '추가 정보'이므로 로컬 전용이다."""
@@ -481,9 +486,31 @@ def destroy_mapping(path) -> bool:
     return False
 
 
-def detect_stale_mapping(dir_path) -> list:
-    """이전 실행이 비정상 종료돼 남은 매핑표를 찾는다(실행 전 점검용)."""
-    return sorted(Path(dir_path).glob(MAPPING_GLOB))
+def detect_stale_artifacts(dir_path) -> list:
+    """이전 실행이 비정상 종료돼 남은 가명처리 중간 산출물(매핑표·명렬·관찰메모·
+    점수·토큰본)을 찾는다(실행 전 점검용). 이름·학번 등 내용은 반환하지 않고
+    파일 경로만 반환한다.
+    """
+    found: list[Path] = []
+    for pattern in SENSITIVE_GLOBS:
+        found.extend(Path(dir_path).glob(pattern))
+    return sorted(found)
+
+
+# 이전 이름 유지(하위 호환) — 매핑표만이 아니라 명렬·관찰메모·점수·토큰본 등
+# 모든 민감 산출물을 함께 찾는다.
+detect_stale_mapping = detect_stale_artifacts
+
+
+def destroy_artifacts(dir_path) -> list[str]:
+    """지정 디렉터리의 민감 산출물(매핑표·명렬·관찰메모·점수·토큰본)을 모두
+    파기한다. 파기한 파일명 목록을 반환한다(이름·학번 등 내용은 출력하지 않는다).
+    """
+    destroyed: list[str] = []
+    for path in detect_stale_artifacts(dir_path):
+        path.unlink()
+        destroyed.append(path.name)
+    return destroyed
 
 
 # ---------------------------------------------------------------------------

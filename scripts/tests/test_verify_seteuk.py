@@ -113,6 +113,9 @@ def make_drafts(text=GOOD_TEXT, exempt=False):
     }
 
 
+ROSTER = {"students": [{"학번": "10101", "이름": "김가상"}]}
+
+
 def test_verify_drafts_pass():
     report = verify_drafts(make_drafts(), PROFILE)
     assert report["fail"] == 0
@@ -147,15 +150,18 @@ def test_saved_xlsx_byte_column_is_live_formula(tmp_path):
 def test_cli_blocks_save_on_fail(tmp_path):
     drafts_path = tmp_path / "d.json"
     profile_path = tmp_path / "p.json"
+    roster_path = tmp_path / "r.json"
     out = tmp_path / "out.xlsx"
     drafts_path.write_text(
         json.dumps(make_drafts(text=GOOD_TEXT + " 또한 정리함."), ensure_ascii=False),
         encoding="utf-8",
     )
     profile_path.write_text(json.dumps(PROFILE, ensure_ascii=False), encoding="utf-8")
+    roster_path.write_text(json.dumps(ROSTER, ensure_ascii=False), encoding="utf-8")
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
-        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
+         "--roster", str(roster_path), "--save", str(out)],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -184,12 +190,15 @@ def test_cli_rejects_empty_drafts(tmp_path):
 def test_cli_success_path_saves(tmp_path):
     drafts_path = tmp_path / "d.json"
     profile_path = tmp_path / "p.json"
+    roster_path = tmp_path / "r.json"
     out = tmp_path / "out.xlsx"
     drafts_path.write_text(json.dumps(make_drafts(), ensure_ascii=False), encoding="utf-8")
     profile_path.write_text(json.dumps(PROFILE, ensure_ascii=False), encoding="utf-8")
+    roster_path.write_text(json.dumps(ROSTER, ensure_ascii=False), encoding="utf-8")
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
-        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
+         "--roster", str(roster_path), "--save", str(out)],
         capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0
@@ -197,17 +206,71 @@ def test_cli_success_path_saves(tmp_path):
     assert "저장 완료" in proc.stdout
 
 
+def _run_cli(tmp_path, drafts, profile=PROFILE, roster=None, save=False):
+    drafts_path = tmp_path / "d.json"
+    profile_path = tmp_path / "p.json"
+    drafts_path.write_text(json.dumps(drafts, ensure_ascii=False), encoding="utf-8")
+    profile_path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
+    cmd = [sys.executable, script, str(drafts_path), "--profile", str(profile_path)]
+    if roster is not None:
+        roster_path = tmp_path / "r.json"
+        roster_path.write_text(json.dumps(roster, ensure_ascii=False), encoding="utf-8")
+        cmd += ["--roster", str(roster_path)]
+    if save:
+        cmd += ["--save", str(tmp_path / "out.xlsx")]
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+
+
+def test_missing_submission_stdout_has_no_name_but_has_id(tmp_path):
+    """미제출 보고에는 학번만 있고 이름은 없어야 한다(적대적 감사 FINDING 1)."""
+    roster = {"students": [{"학번": "10101", "이름": "김가상"}, {"학번": "30103", "이름": "최유진"}]}
+    proc = _run_cli(tmp_path, make_drafts(), roster=roster)
+    assert proc.returncode == 0
+    assert "미제출 30103" in proc.stdout
+    assert "최유진" not in proc.stdout
+
+
+def test_roster_mismatch_stdout_has_no_names(tmp_path):
+    """명렬 불일치 보고에는 두 이름 모두 stdout에 나오면 안 된다(적대적 감사 FINDING 1)."""
+    roster = {"students": [{"학번": "10101", "이름": "김가상"}]}
+    drafts = make_drafts()
+    drafts["classes"][0]["students"][0]["이름"] = "김거짓"
+    proc = _run_cli(tmp_path, drafts, roster=roster)
+    assert "학번 10101" in proc.stdout
+    assert "김가상" not in proc.stdout
+    assert "김거짓" not in proc.stdout
+
+
+def test_cli_save_without_roster_rejected(tmp_path):
+    """--save에 --roster가 없으면 저장을 거부하고 exit 1(적대적 감사 FINDING 2)."""
+    proc = _run_cli(tmp_path, make_drafts(), save=True)
+    assert proc.returncode == 1
+    assert not (tmp_path / "out.xlsx").exists()
+    assert "--roster" in proc.stdout
+
+
+def test_cli_no_save_no_roster_still_allowed(tmp_path):
+    """--save 없이 검사만 할 때는 --roster가 없어도 exit 0 + NO_ROSTER 경고(회귀)."""
+    proc = _run_cli(tmp_path, make_drafts())
+    assert proc.returncode == 0
+    assert "NO_ROSTER" in proc.stdout
+
+
 def test_cli_handles_bom_prefixed_json_inputs(tmp_path):
     """메모장·PowerShell 기본 저장(UTF-8 BOM)으로 만든 초안·프로파일 JSON도
     조용히 실패하지 않고 정상 처리되어야 한다."""
     drafts_path = tmp_path / "d.json"
     profile_path = tmp_path / "p.json"
+    roster_path = tmp_path / "r.json"
     out = tmp_path / "out.xlsx"
     drafts_path.write_bytes(json.dumps(make_drafts(), ensure_ascii=False).encode("utf-8-sig"))
     profile_path.write_bytes(json.dumps(PROFILE, ensure_ascii=False).encode("utf-8-sig"))
+    roster_path.write_bytes(json.dumps(ROSTER, ensure_ascii=False).encode("utf-8-sig"))
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
-        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
+         "--roster", str(roster_path), "--save", str(out)],
         capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0

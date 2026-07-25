@@ -103,7 +103,7 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None) -> di
             exempt = bool(student.get("예외", False))
             nbytes, issues = check_text(text, profile, exempt=exempt)
             for name in find_name_intrusions(text, names):
-                issues.append(("FAIL", "NAME", f"학생 이름 '{name}' 본문 혼입"))
+                issues.append(("FAIL", "NAME", "학생 이름이 본문에 혼입됨"))
 
             # 토큰 잔존 검사
             from pseudonymize import scan_token_residue
@@ -121,7 +121,8 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None) -> di
                     issues.append(("FAIL", "ROSTER", f"학번 {sid}이 명렬에 없음 — 오전사 또는 오매핑 의심"))
                 elif roster_map[sid] != sname:
                     issues.append(("FAIL", "ROSTER",
-                                   f"학번 {sid}의 이름이 명렬({roster_map[sid]})과 불일치({sname}) — 학생 귀속 확인 필요"))
+                                   f"학번 {sid}의 이름이 명렬과 불일치 — 학생 귀속 확인 필요"
+                                   "(명렬 파일에서 직접 대조하세요)"))
             fail += sum(1 for lv, _, _ in issues if lv == "FAIL")
             warn += sum(1 for lv, _, _ in issues if lv == "WARN")
             rows.append(
@@ -200,6 +201,10 @@ def main(argv=None) -> int:
         with open(args.roster, encoding="utf-8-sig") as f:
             roster = json.load(f)
 
+    if args.save and not args.roster:
+        print("저장 거부: --roster 명렬.json 이 필요합니다. 명렬 없이는 학번 잔존·오귀속·미제출자 검사를 할 수 없어 저장하지 않습니다.")
+        return 1
+
     if not str(profile.get("평가자료", "")).strip():
         print("차단: 교사의 평가 자료(채점표, 루브릭 점수, 관찰 기록 등)가 확인되지 않았습니다.")
         print("이 도구는 평가를 대신하지 않습니다. 채점을 먼저 완료하고 활동프로파일의 평가자료 항목에 출처를 기록하세요.")
@@ -217,7 +222,7 @@ def main(argv=None) -> int:
     for level, code, msg in report.get("경고", []):
         print(f"{level} [{code}] {msg}")
     for s in report.get("미제출", []):
-        print(f"미제출 {s['학번']} {s['이름']} — 원본 없음, 별도 확인 필요")
+        print(f"미제출 {s['학번']} — 원본 없음, 별도 확인 필요")
     print(f"결과: FAIL {report['fail']}건, WARN {report['warn']}건, 미제출 {len(report.get('미제출', []))}명")
 
     if report["fail"] > 0:

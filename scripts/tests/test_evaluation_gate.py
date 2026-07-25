@@ -32,17 +32,21 @@ DRAFTS = {
          "톤등급": "중", "세특": GOOD_TEXT, "비고": "", "예외": False}
     ]}]
 }
+ROSTER = {"students": [{"학번": "10101", "이름": "김가상"}]}
 
 
 def _run_cli(tmp_path, profile):
     drafts_path = tmp_path / "d.json"
     profile_path = tmp_path / "p.json"
+    roster_path = tmp_path / "r.json"
     out = tmp_path / "out.xlsx"
     drafts_path.write_text(json.dumps(DRAFTS, ensure_ascii=False), encoding="utf-8")
     profile_path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    roster_path.write_text(json.dumps(ROSTER, ensure_ascii=False), encoding="utf-8")
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
-        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
+         "--roster", str(roster_path), "--save", str(out)],
         capture_output=True, text=True, encoding="utf-8",
     )
     return proc, out
