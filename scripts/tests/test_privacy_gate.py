@@ -48,3 +48,16 @@ def test_unrelated_number_in_body_passes():
     body = BODY.replace("인물의 갈등", "101010번 자료의 갈등")
     report = verify_drafts(_drafts(body), PROFILE, roster=roster)
     assert not any(code == "ID_IN_BODY" for r in report["rows"] for _, code, _ in r["issues"])
+
+
+def test_no_roster_warns_no_roster():
+    """roster 없이 호출하면 학번 잔존 검사와 미제출자 감지가 생략됨을 경고해야 한다(C1 방어선)."""
+    report = verify_drafts(_drafts(BODY), PROFILE, roster=None)
+    assert any(code == "NO_ROSTER" for _, code, _ in report.get("경고", []))
+    assert report["warn"] >= 1
+
+
+def test_with_roster_no_no_roster_warning():
+    roster = {"students": [{"학번": "10101", "이름": "김가상"}]}
+    report = verify_drafts(_drafts(BODY), PROFILE, roster=roster)
+    assert not any(code == "NO_ROSTER" for _, code, _ in report.get("경고", []))

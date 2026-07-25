@@ -137,28 +137,38 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict):
     for student in roster.get("students", []):
         name = student.get("이름", "")
         sid = str(student.get("학번", ""))
-        token = mapping.get("map", {}).get(sid)
-        if not name or not token or name not in out:
+        if not name or name not in out:
             continue
+        token = mapping.get("map", {}).get(sid)
         # 이름은 경계 없이 무조건 치환 (과소탐 방지 — 개인정보 누락이 최악)
         # 한글은 조사로 어절 경계가 흐려지므로 경계 검사를 하면 안 됨
         # 과탐 가능성(긴 단어 내 포함)은 경고로 교사에게 보고
-        out, count = re.subn(re.escape(name), token, out)
-        if count > 0:
-            warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
+        if token:
+            out, count = re.subn(re.escape(name), token, out)
+            if count > 0:
+                warnings.append(f"본문에서 이름 '{name}'을 토큰으로 치환함(학번 {sid}, {count}회)")
+        else:
+            # 토큰이 없는 명렬 이름 = 미제출자. 제출자 본문에 미제출 급우 이름이
+            # 나오면 실명이 그대로 전송되므로 중립 대체어로 치환한다.
+            out, count = re.subn(re.escape(name), "급우", out)
+            if count > 0:
+                warnings.append(f"본문에서 미제출자 이름 '{name}'을 급우로 치환함")
     return out, warnings
 
 
 def reidentify(text: str, mapping: dict) -> str:
-    """토큰을 학번으로 되돌린다(로컬 재결합)."""
+    """토큰을 학번으로 되돌린다(로컬 재결합).
+
+    LLM이 토큰 코어를 소문자로 출력할 수 있으므로 대소문자를 무시하고 치환한다.
+    """
     out = text
     for sid, token in mapping.get("map", {}).items():
         # 토큰도 앞뒤가 숫자가 아닐 때만 치환 (경계 보호)
-        out = re.sub(rf"(?<!\d){re.escape(token)}(?!\d)", sid, out)
+        out = re.sub(rf"(?<!\d){re.escape(token)}(?!\d)", sid, out, flags=re.IGNORECASE)
     return out
 
 
-TOKEN_PATTERN = re.compile(r"(?<![0-9A-Za-z])S-[0-9A-F]{4}(?![0-9A-Fa-f])")
+TOKEN_PATTERN = re.compile(r"(?<![0-9A-Za-z])S-[0-9A-Fa-f]{4}(?![0-9A-Fa-f])")
 
 
 def scan_leak(text: str, roster: dict, scope: str = "구조"):
@@ -170,7 +180,9 @@ def scan_leak(text: str, roster: dict, scope: str = "구조"):
     """
     issues: list[tuple[str, str, str]] = []
     for sid in {str(s.get("학번", "")) for s in roster.get("students", [])}:
-        if sid and sid in text:
+        # 학번은 숫자 경계로 검사한다 — pseudonymize_text가 일부러 보존하는
+        # "101010번" 같은 무관한 숫자열 안의 부분 문자열을 오탐하면 교착이 생긴다.
+        if sid and re.search(rf"(?<!\d){re.escape(sid)}(?!\d)", text):
             issues.append(("FAIL", "ID_LEAK", f"학번 {sid} 노출"))
     level = "FAIL" if scope == "구조" else "WARN"
     for name in {s.get("이름", "") for s in roster.get("students", [])}:

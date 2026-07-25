@@ -153,6 +153,19 @@ def test_reidentify_restores_student_ids():
     assert reidentify(f"{token} 학생의 세특", mapping) == "10102 학생의 세특"
 
 
+def test_scan_token_residue_detects_lowercase_hex_token():
+    """LLM이 토큰 코어를 소문자로 출력해도 잔존 게이트가 잡아야 한다(I3)."""
+    assert scan_token_residue("S-3f7a 학생은 분석함.") == ["S-3f7a"]
+
+
+def test_reidentify_restores_lowercase_hex_token():
+    """소문자로 출력된 토큰도 재결합에서 학번으로 복원되어야 한다(I3)."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    token = mapping["map"]["10101"]
+    lower_token = token[:2] + token[2:].lower()
+    assert reidentify(f"{lower_token} 학생의 세특", mapping) == "10101 학생의 세특"
+
+
 def test_pseudonymize_does_not_corrupt_longer_number():
     """학번이 다른 숫자열의 일부일 때 그 숫자를 훼손하지 않는다."""
     mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
@@ -191,6 +204,17 @@ def test_pseudonymize_over_redaction_is_reported_as_warning():
     assert warnings  # 치환 사실이 보고됨
 
 
+def test_pseudonymize_replaces_non_submitter_name_with_neutral_word():
+    """미제출자(토큰 없음)의 이름이 본문에 있으면 실명 그대로 전송되지 않고
+    중립 대체어 '급우'로 치환되며 경고가 남아야 한다(I2)."""
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])  # 박미정(10103)은 미제출
+    text = "박미정과 함께 토론한 내용을 반영함."
+    out, warnings = pseudonymize_text(text, ROSTER, mapping)
+    assert "박미정" not in out
+    assert "급우" in out
+    assert any("박미정" in w and "급우" in w for w in warnings)
+
+
 from pseudonymize import scan_leak, scan_token_residue, scan_id_in_narrative
 
 
@@ -217,6 +241,18 @@ def test_scan_leak_name_is_warn_in_body():
 
 def test_scan_leak_clean_text_has_no_issues():
     assert scan_leak("봄을 노래한 시를 분석함.", ROSTER, scope="본문") == []
+
+
+def test_scan_leak_does_not_deadlock_on_preserved_longer_number():
+    """pseudonymize_text가 일부러 보존하는 '101010번' 안의 학번 부분 문자열은
+    ID_LEAK로 잡히면 안 된다(I1 — 숫자 경계 없인 교착 발생)."""
+    issues = scan_leak("101010번 자료를 읽음.", ROSTER, scope="본문")
+    assert not any(code == "ID_LEAK" for _, code, _ in issues)
+
+
+def test_scan_leak_flags_bare_id_with_digit_boundary():
+    issues = scan_leak("10101 학생", ROSTER, scope="본문")
+    assert any(code == "ID_LEAK" for _, code, _ in issues)
 
 
 def test_scan_token_residue_detects_leftover_tokens():

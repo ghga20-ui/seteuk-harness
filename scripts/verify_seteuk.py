@@ -83,8 +83,11 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None) -> di
     보고서의 "미제출" 목록으로 반환한다(잘못된 학생 귀속과 조용한 누락 방지).
     """
     roster_map = None
+    경고: list[tuple[str, str, str]] = []
     if roster is not None:
         roster_map = {str(s.get("학번", "")): s.get("이름", "") for s in roster.get("students", [])}
+    else:
+        경고.append(("WARN", "NO_ROSTER", "명렬 미제공 — 학번 잔존 검사와 미제출자 감지가 생략됨"))
 
     rows = []
     fail = warn = 0
@@ -128,7 +131,8 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None) -> di
     missing = []
     if roster_map is not None:
         missing = [{"학번": sid, "이름": name} for sid, name in roster_map.items() if sid not in seen_ids]
-    return {"rows": rows, "fail": fail, "warn": warn, "미제출": missing}
+    warn += len(경고)
+    return {"rows": rows, "fail": fail, "warn": warn, "미제출": missing, "경고": 경고}
 
 
 def save_xlsx(drafts: dict, report: dict, out_path: str) -> None:
@@ -208,6 +212,8 @@ def main(argv=None) -> int:
     for row in report["rows"]:
         for level, code, msg in row["issues"]:
             print(f"{level} {row['반']} {row['학번']} [{code}] {msg}")
+    for level, code, msg in report.get("경고", []):
+        print(f"{level} [{code}] {msg}")
     for s in report.get("미제출", []):
         print(f"미제출 {s['학번']} {s['이름']} — 원본 없음, 별도 확인 필요")
     print(f"결과: FAIL {report['fail']}건, WARN {report['warn']}건, 미제출 {len(report.get('미제출', []))}명")
