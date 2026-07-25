@@ -57,3 +57,37 @@ def test_check_count_mismatch_reports_numbers():
 def test_check_count_handles_multi_page():
     assert check_count(image_count=54, pages_per_student=2, expected_students=27)[0] is True
     assert check_count(image_count=53, pages_per_student=2, expected_students=27)[0] is False
+
+
+def _make_rotated_jpeg(tmp_path):
+    """EXIF Orientation=6(90도 회전 필요) 태그가 붙은 세로 사진을 흉내낸다."""
+    from PIL import Image
+
+    p = tmp_path / "회전.jpg"
+    img = Image.new("RGB", (100, 50), (255, 255, 255))  # 가로로 저장된 픽셀
+    exif = img.getexif()
+    exif[274] = 6  # Orientation: 시계방향 90도 회전 필요
+    img.save(p, exif=exif)
+    return p
+
+
+def test_mask_region_applies_exif_orientation(tmp_path):
+    """EXIF 회전이 적용된 뒤의 방향을 기준으로 마스킹한다(폰 세로 촬영 대응)."""
+    from PIL import Image
+
+    src = _make_rotated_jpeg(tmp_path)
+    dst = tmp_path / "마스킹.jpg"
+    mask_region(src, dst, (0.0, 0.0, 1.0, 0.2))
+    out = Image.open(dst)
+    assert out.size == (50, 100)  # 회전 적용 후 세로 이미지
+    assert out.getpixel((25, 5))[0] < 40      # 상단 20%는 마스킹됨
+    assert out.getpixel((25, 90))[0] > 200    # 하단은 보존
+
+
+def test_crop_region_applies_exif_orientation(tmp_path):
+    from PIL import Image
+
+    src = _make_rotated_jpeg(tmp_path)
+    dst = tmp_path / "인적.jpg"
+    crop_region(src, dst, (0.0, 0.0, 1.0, 0.2))
+    assert Image.open(dst).size == (50, 20)

@@ -4,10 +4,9 @@
 
 비전(LLM)에 보내기 전에 인적사항 구역을 덮는다. 원본은 수정하지 않고 사본을 만든다.
 좌표는 이미지 크기에 무관한 비율(0~1)이라 촬영 해상도가 달라도 재사용할 수 있다.
+EXIF 회전을 적용한 뒤의 방향을 기준으로 좌표를 해석한다.
 """
 from __future__ import annotations
-
-from pathlib import Path
 
 
 def _abs_box(size, box):
@@ -18,9 +17,10 @@ def _abs_box(size, box):
 
 def mask_region(src, dst, box) -> None:
     """비율 좌표 영역을 검은 사각형으로 덮은 사본을 만든다."""
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageOps
 
     img = Image.open(src).convert("RGB")
+    img = ImageOps.exif_transpose(img)
     draw = ImageDraw.Draw(img)
     draw.rectangle(_abs_box(img.size, box), fill=(0, 0, 0))
     img.save(dst)
@@ -28,9 +28,10 @@ def mask_region(src, dst, box) -> None:
 
 def crop_region(src, dst, box) -> None:
     """인적사항 구역만 잘라 로컬 대조용 썸네일을 만든다(LLM 전송 금지)."""
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     img = Image.open(src).convert("RGB")
+    img = ImageOps.exif_transpose(img)
     img.crop(_abs_box(img.size, box)).save(dst)
 
 
