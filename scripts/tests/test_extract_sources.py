@@ -97,6 +97,26 @@ def test_extract_xlsx_rows(tmp_path):
     assert "감상문 본문입니다." in text
 
 
+def test_extract_text_with_bom(tmp_path):
+    """메모장 기본 저장(UTF-8 BOM)한 텍스트 원본도 앞에 BOM 문자가 남지 않아야 한다."""
+    p = tmp_path / "감상문.txt"
+    p.write_bytes("가상 활동에서 감상문을 작성함.\n".encode("utf-8-sig"))
+    fmt, text = extract(p)
+    assert fmt == "text"
+    assert text.startswith("가상 활동에서")
+    assert "﻿" not in text
+
+
+def test_extract_html_with_bom_no_leading_junk(tmp_path):
+    """확장자 위장 HTML(BOM 포함)도 본문 앞에 BOM 문자가 섞이면 안 된다."""
+    p = tmp_path / "가상.xls"
+    p.write_bytes("<!DOCTYPE html><html><body>학생 감상문 내용입니다.</body></html>".encode("utf-8-sig"))
+    fmt, text = extract(p)
+    assert fmt == "html"
+    assert text.startswith("학생 감상문")
+    assert "﻿" not in text
+
+
 def test_cli_unsupported_hwp_exits_2(tmp_path):
     script = str(Path(__file__).resolve().parents[1] / "extract_sources.py")
     proc = subprocess.run(

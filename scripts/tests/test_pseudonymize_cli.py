@@ -432,3 +432,82 @@ def test_memo_cli_leak_blocks_save(tmp_path):
     assert not out.exists()
     assert_no_pii(proc.stdout)
     assert_no_pii(proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# memo — BOM 내성 (메모장·PowerShell 5.1 -Encoding utf8 기본값은 UTF-8 BOM을 붙인다)
+# ---------------------------------------------------------------------------
+
+def test_memo_cli_text_with_bom_still_parses(tmp_path):
+    """메모장에서 저장한 BOM 붙은 텍스트 메모도 조용히 0건 처리되지 않고 정상 수집된다."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_bytes("10101: 모둠 진행을 맡음.\n".encode("utf-8-sig"))
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert out.exists()
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 1
+    assert "관찰 메모: 1건 수집" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# memo — 침묵 실패 제거: 0건 수집이 조용히 성공으로 보이면 안 된다
+# ---------------------------------------------------------------------------
+
+def test_memo_cli_text_zero_candidates_fails(tmp_path):
+    """내용은 있지만 '학번: 메모' 형식이 하나도 없으면 조용히 0건 처리하지 않고 exit 1."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text(
+        "오늘 수업은 순조롭게 진행되었다.\n형식이 학번으로 시작하지 않는다.\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "메모를 한 건도 읽지 못했습니다" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_memo_cli_all_candidates_unmapped_warns_but_succeeds(tmp_path):
+    """읽은 메모가 있으나 전부 미제출자(매핑 없음)라 수집 0건이면 exit 0을 유지하되
+    경고 문구가 명확해야 한다(단순 '0건 수집'과 구분)."""
+    roster_path = _write_roster_json(tmp_path)
+    # 10103(박미정)만 미제출 → 매핑 없음
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text("10103: 박미정은 미제출이지만 메모가 남아 있다.\n", encoding="utf-8")
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert "수집 0건" in proc.stdout
+    assert "미제출자 확인 필요" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_memo_cli_empty_file_fails(tmp_path):
+    """메모 파일이 완전히 비어 있으면 exit 1 + 명확한 안내."""
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text("", encoding="utf-8")
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "메모 파일이 비어 있습니다" in proc.stdout
+    assert_no_pii(proc.stdout)

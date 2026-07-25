@@ -29,7 +29,9 @@ def _rows_from_xlsx(path):
 
 
 def _rows_from_text(path):
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    # utf-8-sig: 메모장·PowerShell 5.1 -Encoding utf8 기본값은 UTF-8 BOM을 붙인다.
+    # BOM이 있으면 제거하고, 없으면 그대로 읽으므로 항상 안전하다.
+    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     return [line.split() for line in text.splitlines() if line.strip()]
 
 
@@ -263,7 +265,8 @@ _MEMO_LINE = re.compile(r"^(\d+)\s*[:]?\s*(.*)$")
 
 def parse_memo_text(path):
     """`학번: 메모` 또는 `학번 메모` 형식의 텍스트에서 (학번, 메모) 쌍을 추출한다."""
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    # utf-8-sig: BOM 붙은 파일(메모장·PowerShell 기본 저장)도 조용히 실패하지 않게 한다.
+    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     pairs = []
     for line in text.splitlines():
         line = line.strip()
@@ -279,6 +282,12 @@ def parse_memo_text(path):
     return pairs
 
 
+def _xlsx_is_empty(path) -> bool:
+    """워크북에 실제 내용(비공백 셀)이 하나도 없는지 확인한다."""
+    rows = _rows_from_xlsx(path)
+    return not any(any(c.strip() for c in row) for row in rows)
+
+
 MAPPING_GLOB = "매핑*.json"
 
 
@@ -290,7 +299,7 @@ def save_mapping(mapping: dict, path) -> None:
 
 def load_mapping(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None
@@ -317,7 +326,9 @@ def detect_stale_mapping(dir_path) -> list:
 # ---------------------------------------------------------------------------
 
 def _read_json(path):
-    with open(path, encoding="utf-8") as f:
+    # utf-8-sig: 교사가 명렬.json/활동프로파일.json 등을 메모장에서 열어 다시
+    # 저장하면 BOM이 붙는다 — 붙어 있으면 제거하고, 없으면 그대로 읽는다.
+    with open(path, encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -343,7 +354,7 @@ def _cmd_roster(args) -> int:
 def _load_submitted_ids(args) -> list[str]:
     if args.submitted:
         return [s.strip() for s in args.submitted.split(",") if s.strip()]
-    with open(args.submitted_from, encoding="utf-8") as f:
+    with open(args.submitted_from, encoding="utf-8-sig") as f:
         return [line.strip() for line in f if line.strip()]
 
 
@@ -407,14 +418,29 @@ def _cmd_memo(args) -> int:
     input_path = Path(args.input)
     suffix = input_path.suffix.lower()
     if suffix == ".xlsx":
+        if _xlsx_is_empty(input_path):
+            print("메모 파일이 비어 있습니다.")
+            return 1
         pairs = parse_memo_xlsx(input_path)
         if pairs is None:
             print("메모 열 헤더를 '관찰 메모'로 지정해 주세요")
             return 1
     elif suffix in (".txt", ".md"):
+        # utf-8-sig로 먼저 읽어 BOM 유무와 무관하게 "완전히 비었는지"를 정확히 판정한다.
+        raw = input_path.read_text(encoding="utf-8-sig", errors="replace")
+        if not raw.strip():
+            print("메모 파일이 비어 있습니다.")
+            return 1
         pairs = parse_memo_text(input_path)
     else:
         print("지원하지 않는 입력 형식입니다. xlsx 또는 txt/md 파일을 사용해 주세요.")
+        return 1
+
+    if not pairs:
+        print(
+            "메모를 한 건도 읽지 못했습니다. 텍스트 파일은 '학번: 메모' 형식인지, "
+            "엑셀은 메모 열 헤더가 '관찰 메모'인지 확인해 주세요."
+        )
         return 1
 
     out_items = []
@@ -439,6 +465,13 @@ def _cmd_memo(args) -> int:
         return 1
 
     _write_json({"items": out_items}, args.out)
+
+    if not out_items:
+        # 후보는 있었으나 전부 매핑에 없는 학번(=미제출자)이라 제외된 경우.
+        # 형식 오류로 인한 0건과 구분되도록 경고를 명확히 한다.
+        print(f"수집 0건 — 읽은 메모 {excluded}건이 모두 매핑에 없는 학번입니다(미제출자 확인 필요).")
+        return 0
+
     print(
         f"관찰 메모: {len(out_items)}건 수집({excluded}건은 매핑 없음으로 제외). "
         f"본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건."

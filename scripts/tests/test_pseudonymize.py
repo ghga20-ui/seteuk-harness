@@ -43,6 +43,16 @@ def test_detect_roster_from_plain_text(tmp_path):
     assert roster["students"][0]["학번"] == "10101"
 
 
+def test_detect_roster_from_plain_text_with_bom(tmp_path):
+    """메모장·PowerShell 기본 저장(UTF-8 BOM)으로 만든 명단 텍스트도 조용히 실패하지
+    않고 정상 인식되어야 한다."""
+    p = tmp_path / "명단.txt"
+    p.write_bytes("10101 김가상\n10102 이허구\n".encode("utf-8-sig"))
+    roster = detect_roster(p)
+    assert len(roster["students"]) == 2
+    assert roster["students"][0]["학번"] == "10101"
+
+
 def test_detect_roster_ignores_long_body_column(tmp_path):
     """학생 원본(행마다 긴 본문)은 명렬이 아니다 — 본문 열은 이름으로 오인하지 않는다."""
     path = _make_xlsx(
@@ -308,3 +318,15 @@ def test_detect_stale_mapping_finds_leftovers(tmp_path):
 
 def test_detect_stale_mapping_empty_when_clean(tmp_path):
     assert detect_stale_mapping(tmp_path) == []
+
+
+def test_load_mapping_handles_bom(tmp_path):
+    """교사가 매핑.json을 메모장에서 열어 다시 저장해도(BOM 부여) 로드가 실패하면 안 된다."""
+    import json
+
+    p = tmp_path / "매핑.json"
+    mapping = issue_tokens(ROSTER, submitted_ids=["10101"])
+    p.write_bytes(json.dumps(mapping, ensure_ascii=False).encode("utf-8-sig"))
+    loaded = load_mapping(p)
+    assert loaded is not None
+    assert loaded["map"] == mapping["map"]

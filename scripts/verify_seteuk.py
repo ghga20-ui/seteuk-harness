@@ -27,7 +27,8 @@ def load_rules(path=RULES_PATH) -> dict:
     """규칙 파일을 읽어 기본값 위에 덮는다. 실패하면 기본값을 반환한다."""
     rules = dict(DEFAULT_RULES)
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig: 규칙 파일을 메모장 등에서 편집하면 BOM이 붙을 수 있다.
+        with open(path, encoding="utf-8-sig") as f:
             rules.update(json.load(f))
     except (OSError, ValueError):
         pass
@@ -189,13 +190,14 @@ def main(argv=None) -> int:
     parser.add_argument("--save", help="검증 통과 시 저장할 xlsx 경로")
     args = parser.parse_args(argv)
 
-    with open(args.drafts, encoding="utf-8") as f:
+    # utf-8-sig: 교사가 초안·프로파일·명렬 JSON을 메모장에서 편집하면 BOM이 붙을 수 있다.
+    with open(args.drafts, encoding="utf-8-sig") as f:
         drafts = json.load(f)
-    with open(args.profile, encoding="utf-8") as f:
+    with open(args.profile, encoding="utf-8-sig") as f:
         profile = json.load(f)
     roster = None
     if args.roster:
-        with open(args.roster, encoding="utf-8") as f:
+        with open(args.roster, encoding="utf-8-sig") as f:
             roster = json.load(f)
 
     if not str(profile.get("평가자료", "")).strip():

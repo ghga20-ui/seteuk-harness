@@ -25,6 +25,16 @@ def test_load_rules_falls_back_when_missing(tmp_path):
     assert "또한" in rules["금지어휘"]
 
 
+def test_load_rules_handles_bom(tmp_path):
+    """메모장 등으로 저장된 BOM 붙은 규칙 파일도 정상 로드되어야 한다."""
+    custom = tmp_path / "규칙.json"
+    custom.write_bytes(
+        json.dumps({"금지어휘": ["또한", "가상금지어"]}, ensure_ascii=False).encode("utf-8-sig")
+    )
+    rules = load_rules(custom)
+    assert "가상금지어" in rules["금지어휘"]
+
+
 def test_check_text_respects_custom_rules(tmp_path):
     custom = tmp_path / "규칙.json"
     custom.write_text(

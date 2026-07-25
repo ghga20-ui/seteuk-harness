@@ -109,8 +109,9 @@ class _HtmlText(HTMLParser):
 
 
 def _extract_html(path) -> str:
+    # utf-8-sig: BOM 붙은 파일(메모장 저장 등)도 조용히 텍스트 앞에 BOM을 남기지 않는다.
     parser = _HtmlText()
-    parser.feed(Path(path).read_text(encoding="utf-8", errors="replace"))
+    parser.feed(Path(path).read_text(encoding="utf-8-sig", errors="replace"))
     return parser.text()
 
 
@@ -139,7 +140,7 @@ def extract(path):
     if fmt == "xlsx":
         return fmt, _extract_xlsx(path)
     if fmt == "text":
-        return fmt, Path(path).read_text(encoding="utf-8", errors="replace")
+        return fmt, Path(path).read_text(encoding="utf-8-sig", errors="replace")
     raise UnsupportedFormatError(fmt)
 
 

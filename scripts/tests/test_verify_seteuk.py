@@ -195,3 +195,21 @@ def test_cli_success_path_saves(tmp_path):
     assert proc.returncode == 0
     assert out.exists()
     assert "저장 완료" in proc.stdout
+
+
+def test_cli_handles_bom_prefixed_json_inputs(tmp_path):
+    """메모장·PowerShell 기본 저장(UTF-8 BOM)으로 만든 초안·프로파일 JSON도
+    조용히 실패하지 않고 정상 처리되어야 한다."""
+    drafts_path = tmp_path / "d.json"
+    profile_path = tmp_path / "p.json"
+    out = tmp_path / "out.xlsx"
+    drafts_path.write_bytes(json.dumps(make_drafts(), ensure_ascii=False).encode("utf-8-sig"))
+    profile_path.write_bytes(json.dumps(PROFILE, ensure_ascii=False).encode("utf-8-sig"))
+    script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
+    proc = subprocess.run(
+        [sys.executable, script, str(drafts_path), "--profile", str(profile_path), "--save", str(out)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 0
+    assert out.exists()
+    assert "저장 완료" in proc.stdout
