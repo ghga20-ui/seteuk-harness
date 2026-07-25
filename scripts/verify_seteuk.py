@@ -100,6 +100,18 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None) -> di
             nbytes, issues = check_text(text, profile, exempt=exempt)
             for name in find_name_intrusions(text, names):
                 issues.append(("FAIL", "NAME", f"학생 이름 '{name}' 본문 혼입"))
+
+            # 토큰 잔존 검사
+            from pseudonymize import scan_token_residue
+            for token in scan_token_residue(text):
+                issues.append(("FAIL", "TOKEN_RESIDUE", f"토큰 '{token}'이 세특 본문에 남아 있음"))
+
+            # 명렬이 제공되면 본문에 학번이 남아 있는지 검사
+            if roster is not None:
+                from pseudonymize import scan_id_in_narrative
+                for found_sid in scan_id_in_narrative(text, roster):
+                    issues.append(("FAIL", "ID_IN_BODY", f"세특 본문에 학번 {found_sid} 노출"))
+
             if roster_map is not None:
                 if sid not in roster_map:
                     issues.append(("FAIL", "ROSTER", f"학번 {sid}이 명렬에 없음 — 오전사 또는 오매핑 의심"))

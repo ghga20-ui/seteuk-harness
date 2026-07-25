@@ -157,7 +157,7 @@ def reidentify(text: str, mapping: dict) -> str:
     return out
 
 
-TOKEN_PATTERN = re.compile(r"\bS-[0-9A-F]{4}\b")
+TOKEN_PATTERN = re.compile(r"\bS-[0-9A-F]{4}(?![0-9A-Fa-f])")
 
 
 def scan_leak(text: str, roster: dict, scope: str = "구조"):
