@@ -211,6 +211,74 @@ def scan_id_in_narrative(text: str, roster: dict) -> list[str]:
     return found
 
 
+MEMO_HEADER_ALIASES = {"관찰메모", "메모", "특기사항"}
+
+
+def _normalize_header(cell) -> str:
+    """헤더 셀 비교용 정규화 — 공백을 무시한다('관찰 메모' == '관찰메모')."""
+    return re.sub(r"\s+", "", cell or "")
+
+
+def _find_memo_header_indices(rows):
+    """헤더 행에서 (학번열, 메모열, 헤더행번호)를 찾는다. 없으면 (None, None, -1)."""
+    for i, row in enumerate(rows):
+        id_idx = next((j for j, c in enumerate(row) if c in ("학번", "번호")), None)
+        memo_idx = next(
+            (j for j, c in enumerate(row) if _normalize_header(c) in MEMO_HEADER_ALIASES), None
+        )
+        if id_idx is not None and memo_idx is not None:
+            return (id_idx, memo_idx, i)
+    return (None, None, -1)
+
+
+def parse_memo_xlsx(path):
+    """관찰 메모 xlsx에서 (학번, 메모) 쌍을 추출한다.
+
+    메모 열 헤더('관찰 메모'/'관찰메모'/'메모'/'특기사항' 중 하나, 공백 무시)를
+    찾지 못하면 None을 반환한다(호출부가 exit 1 + 안내로 처리).
+    """
+    rows = _rows_from_xlsx(path)
+    id_idx, memo_idx, header_row_idx = _find_memo_header_indices(rows)
+    if id_idx is None or memo_idx is None:
+        return None
+
+    pairs = []
+    for i, row in enumerate(rows):
+        if i == header_row_idx:
+            continue
+        if id_idx >= len(row) or memo_idx >= len(row):
+            continue
+        sid = row[id_idx]
+        memo = row[memo_idx]
+        if not sid or not STUDENT_ID.fullmatch(sid):
+            continue
+        if not memo:
+            continue
+        pairs.append((sid, memo))
+    return pairs
+
+
+_MEMO_LINE = re.compile(r"^(\d+)\s*[:]?\s*(.*)$")
+
+
+def parse_memo_text(path):
+    """`학번: 메모` 또는 `학번 메모` 형식의 텍스트에서 (학번, 메모) 쌍을 추출한다."""
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    pairs = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = _MEMO_LINE.match(line)
+        if not m:
+            continue
+        sid, memo = m.group(1), m.group(2).strip()
+        if not memo:
+            continue
+        pairs.append((sid, memo))
+    return pairs
+
+
 MAPPING_GLOB = "매핑*.json"
 
 
@@ -326,6 +394,58 @@ def _cmd_mask(args) -> int:
     return 0
 
 
+def _cmd_memo(args) -> int:
+    """교사 관찰 메모(파일)를 토큰화한다.
+
+    대화창에 실명·학번을 입력하는 채널을 원천 차단하기 위한 명령이다 — 메모는
+    반드시 파일(채점표의 메모 열 또는 별도 텍스트)로 받고, 여기서 토큰화한 뒤에만
+    에이전트에게 결과 파일을 넘긴다.
+    """
+    roster = _read_json(args.roster)
+    mapping = _read_json(args.mapping)
+
+    input_path = Path(args.input)
+    suffix = input_path.suffix.lower()
+    if suffix == ".xlsx":
+        pairs = parse_memo_xlsx(input_path)
+        if pairs is None:
+            print("메모 열 헤더를 '관찰 메모'로 지정해 주세요")
+            return 1
+    elif suffix in (".txt", ".md"):
+        pairs = parse_memo_text(input_path)
+    else:
+        print("지원하지 않는 입력 형식입니다. xlsx 또는 txt/md 파일을 사용해 주세요.")
+        return 1
+
+    out_items = []
+    excluded = 0
+    total_warnings = 0
+    for sid, memo in pairs:
+        token = mapping.get("map", {}).get(str(sid))
+        if token is None:
+            excluded += 1
+            continue
+        text, warnings = pseudonymize_text(memo, roster, mapping)
+        total_warnings += len(warnings)
+        out_items.append({"토큰": token, "메모": text})
+
+    leak_count = 0
+    for item in out_items:
+        issues = scan_leak(item["메모"], roster, scope="본문")
+        leak_count += sum(1 for level, code, _ in issues if level == "FAIL" and code == "ID_LEAK")
+
+    if leak_count > 0:
+        print(f"관찰 메모 중단: 학번 유출 {leak_count}건이 발견되어 저장하지 않았습니다.")
+        return 1
+
+    _write_json({"items": out_items}, args.out)
+    print(
+        f"관찰 메모: {len(out_items)}건 수집({excluded}건은 매핑 없음으로 제외). "
+        f"본문 이름 치환 경고 {total_warnings}건, 학번 유출 0건."
+    )
+    return 0
+
+
 def _cmd_finalize(args) -> int:
     draft = _read_json(args.input)
     roster = _read_json(args.roster)
@@ -393,6 +513,13 @@ def main(argv=None) -> int:
     p_mask.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_mask.add_argument("--out", required=True, help="토큰본.json 저장 경로")
     p_mask.set_defaults(func=_cmd_mask)
+
+    p_memo = sub.add_parser("memo", help="교사 관찰 메모 토큰화(파일 입력 전용)")
+    p_memo.add_argument("input", help="관찰 메모 원본 파일(xlsx 또는 txt/md)")
+    p_memo.add_argument("--roster", required=True, help="명렬.json 경로")
+    p_memo.add_argument("--mapping", required=True, help="매핑.json 경로")
+    p_memo.add_argument("--out", required=True, help="관찰메모.json 저장 경로")
+    p_memo.set_defaults(func=_cmd_memo)
 
     p_finalize = sub.add_parser("finalize", help="토큰 → 실명 재결합")
     p_finalize.add_argument("input", help='토큰 초안 JSON({"classes":[{"name","students":[{"토큰",...}]}]})')

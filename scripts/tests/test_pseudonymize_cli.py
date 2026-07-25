@@ -262,3 +262,173 @@ def test_finalize_cli_unmapped_token_fails(tmp_path):
     assert proc.returncode == 1
     assert not out.exists()
     assert_no_pii(proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# memo — 교사 관찰 메모를 대화가 아니라 파일로 받아 토큰화한다.
+# 핵심 계약: 이름·학번·메모 내용이 stdout/stderr에 등장하면 안 된다.
+# ---------------------------------------------------------------------------
+
+def test_memo_cli_xlsx_happy_path(tmp_path):
+    from openpyxl import Workbook
+
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    p = tmp_path / "채점표.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "관찰 메모"])
+    ws.append(["10101", "10101 김가상은 발표 때 질문이 좋았다."])
+    ws.append(["10102", "이허구와 함께 성실히 참여함."])
+    wb.save(p)
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    assert out.exists()
+
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 2
+    for item in saved["items"]:
+        assert item["토큰"].startswith("S-")
+        assert "메모" in item
+
+    saved_text = out.read_text(encoding="utf-8")
+    assert_no_pii(saved_text)
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+    assert "관찰 메모: 2건 수집" in proc.stdout
+    assert "학번 유출 0건" in proc.stdout
+
+
+def test_memo_cli_xlsx_header_variants(tmp_path):
+    """헤더 공백·표기 변형(특기사항, 관찰메모)도 자동 탐지한다."""
+    from openpyxl import Workbook
+
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "채점표.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "특기사항"])
+    ws.append(["10101", "성실히 참여함."])
+    wb.save(p)
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 1
+    assert_no_pii(proc.stdout)
+
+
+def test_memo_cli_xlsx_missing_header_fails(tmp_path):
+    from openpyxl import Workbook
+
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "채점표.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "비고"])
+    ws.append(["10101", "성실히 참여함."])
+    wb.save(p)
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "메모 열 헤더를 '관찰 메모'로 지정해 주세요" in proc.stdout
+    assert_no_pii(proc.stdout)
+
+
+def test_memo_cli_xlsx_skips_empty_memo_cells(tmp_path):
+    from openpyxl import Workbook
+
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    p = tmp_path / "채점표.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["학번", "관찰 메모"])
+    ws.append(["10101", "발표가 인상적이었다."])
+    ws.append(["10102", ""])
+    wb.save(p)
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 1
+    assert "관찰 메모: 1건 수집" in proc.stdout
+
+
+def test_memo_cli_text_happy_path(tmp_path):
+    roster_path = _write_roster_json(tmp_path)
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101", "10102"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text(
+        "10101: 김가상은 발표 때 질문이 좋았다.\n"
+        "10102 이허구와 함께 성실히 참여함.\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 2
+    for item in saved["items"]:
+        assert item["토큰"].startswith("S-")
+
+    saved_text = out.read_text(encoding="utf-8")
+    assert_no_pii(saved_text)
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
+    assert "관찰 메모: 2건 수집" in proc.stdout
+
+
+def test_memo_cli_unmapped_id_excluded(tmp_path):
+    """명렬에 없거나(미제출) 매핑이 없는 학번의 메모는 건수만 반영하고 제외한다."""
+    roster_path = _write_roster_json(tmp_path)
+    # 10103(박미정)은 미제출 → 토큰 미발급
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text(
+        "10101: 발표가 좋았다.\n"
+        "10103: 박미정은 미제출이지만 메모가 남아 있다.\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 1
+    assert saved["items"][0]["토큰"] == mapping["map"]["10101"]
+    assert "1건 수집(1건은 매핑 없음으로 제외)" in proc.stdout
+    assert_no_pii(proc.stdout)
+    assert_no_pii(out.read_text(encoding="utf-8"))
+
+
+def test_memo_cli_leak_blocks_save(tmp_path):
+    """메모 본문에 매핑 없는(미제출자) 학번이 그대로 남으면 저장하지 않고 exit 1."""
+    roster_path = _write_roster_json(tmp_path)
+    # 10103(박미정)은 미제출 → 토큰 미발급이라 pseudonymize_text가 치환할 수 없다
+    mapping_path, mapping = _write_mapping(tmp_path, roster_path, ["10101"])
+
+    p = tmp_path / "메모.txt"
+    p.write_text("10101: 10103 학생과 비교하면 발표가 좋았다.\n", encoding="utf-8")
+
+    out = tmp_path / "관찰메모.json"
+    proc = run("memo", str(p), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert_no_pii(proc.stdout)
+    assert_no_pii(proc.stderr)
