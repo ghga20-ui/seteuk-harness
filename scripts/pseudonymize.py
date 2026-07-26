@@ -1453,7 +1453,8 @@ MAPPING_GLOB = "매핑*.json"
 # 가명처리 파이프라인이 로컬에 남기는 모든 중간 산출물. 명렬(전체 학급 실명
 # 원장)도 매핑표와 마찬가지로 무기한 평문으로 남으면 안 되므로 파기·잔존
 # 감지 대상에 포함한다.
-SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수*.json", "토큰본*.json")
+SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수*.json",
+                   "토큰본*.json", "제출자*.json")
 
 
 def save_mapping(mapping: dict, path) -> None:
@@ -2046,6 +2047,32 @@ def _cmd_score_sum(args, mapping, input_path) -> int:
     return 0
 
 
+def _cmd_destroy(args) -> int:
+    """가명처리 중간 산출물을 파기한다.
+
+    되돌릴 수 없는 동작이므로 기본은 목록만 보여주고, 실제 삭제는 --yes를
+    요구한다. 파일명은 출력하되 내용(실명·학번)은 열지도 출력하지도 않는다.
+    """
+    found = detect_stale_artifacts(args.dir)
+    if not found:
+        print("파기할 중간 산출물이 없습니다.")
+        return 0
+
+    names = ", ".join(p.name for p in found)
+    if not args.yes:
+        print(f"파기 대상 {len(found)}건: {names}")
+        print("실제로 지우려면 --yes 를 붙여 다시 실행해 주세요(되돌릴 수 없습니다).")
+        return 0
+
+    destroyed = destroy_artifacts(args.dir)
+    remaining = detect_stale_artifacts(args.dir)
+    print(f"파기 완료: {len(destroyed)}건 — {', '.join(destroyed)}")
+    if remaining:
+        print(f"경고: {len(remaining)}건이 남아 있습니다 — {', '.join(p.name for p in remaining)}")
+        return 1
+    return 0
+
+
 def _cmd_finalize(args) -> int:
     draft = _read_json(args.input)
     roster = _read_json(args.roster)
@@ -2171,6 +2198,12 @@ def main(argv=None) -> int:
     p_finalize.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_finalize.add_argument("--out", required=True, help="실명초안.json 저장 경로")
     p_finalize.set_defaults(func=_cmd_finalize)
+
+    p_destroy = sub.add_parser("destroy", help="가명처리 중간 산출물 파기")
+    p_destroy.add_argument("--dir", default=".", help="검사할 폴더(기본: 현재 폴더)")
+    p_destroy.add_argument("--yes", action="store_true",
+                           help="실제로 삭제한다(없으면 목록만 보여준다)")
+    p_destroy.set_defaults(func=_cmd_destroy)
 
     args = parser.parse_args(argv)
     return args.func(args)
