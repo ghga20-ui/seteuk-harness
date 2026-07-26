@@ -100,11 +100,24 @@
     </div>
   </div>
 
+  <div class="card" id="scorecard" hidden>
+    <h2>3 · 점수 (선택)</h2>
+    <p class="hint" style="margin-top:0">
+      채점표에서 <strong>학번과 점수 두 열을 함께</strong> 긁어 붙여넣으세요.
+      비워 두면 점수 없이 진행합니다(등급만 있으면 등급을 그대로 적어도 됩니다).
+    </p>
+    <textarea id="scoresrc" spellcheck="false" style="min-height:130px"
+              placeholder="30101&#9;15&#10;30102&#9;13&#10;30103&#9;상"></textarea>
+    <div id="scorenotices" style="margin-top:.85rem"></div>
+    <div class="stats" id="scorestats"></div>
+    <p class="hint" id="scoredist"></p>
+  </div>
+
   <div class="card" id="savecard" hidden>
-    <h2>3 · 저장</h2>
-    <p class="hint">두 파일이 받아집니다. 내려받은 뒤 활동 폴더로 옮겨 주세요.</p>
+    <h2>4 · 저장</h2>
+    <p class="hint">내려받은 뒤 활동 폴더로 옮겨 주세요.</p>
     <div class="actions">
-      <button class="primary" id="save">명렬.json · 제출자.json 저장</button>
+      <button class="primary" id="save">저장</button>
       <span class="hint" id="saved"></span>
     </div>
   </div>
@@ -112,7 +125,7 @@
   <p class="privacy">
     이 페이지는 <strong>서버가 없습니다.</strong> 인터넷 연결을 끊어도 동작하며, 붙여넣은 명단은
     이 브라우저 밖으로 나가지 않습니다. 저장 버튼은 파일을 내려받을 뿐 어디에도 전송하지 않습니다.
-    만들어진 <code>명렬.json</code>은 실명이 담긴 파일이므로, 세특 검수가 끝나면
+    만들어진 <code>명렬.json</code>·<code>점수원본.json</code>은 실명·학번이 담긴 파일이므로, 세특 검수가 끝나면
     <code>pseudonymize.py destroy</code>로 파기하세요.
   </p>
 </main>
@@ -180,7 +193,101 @@ function median(xs) {
   return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 }
 
-let state = { students: [], notes: [] };
+let state = { students: [], scores: [] };
+
+/**
+ * 점수 붙여넣기를 읽는다. 명렬을 이미 갖고 있으므로 학번 열을 명렬과 대조해 고른다 —
+ * 채점표에서 어느 숫자 열이 점수인지 헷갈릴 일이 없어진다.
+ */
+function parseScores() {
+  const wrap = document.getElementById("scorenotices");
+  const stats = document.getElementById("scorestats");
+  const dist = document.getElementById("scoredist");
+  wrap.innerHTML = ""; stats.innerHTML = ""; dist.textContent = "";
+  state.scores = [];
+
+  const text = document.getElementById("scoresrc").value;
+  const rows = splitRows(text);
+  if (!rows.length) return;
+
+  const known = new Set(state.students.map(s => s.학번));
+  const width = Math.max(...rows.map(r => r.length));
+
+  // 학번 열: 명렬과 가장 많이 일치하는 열
+  let idCol = -1, best = 0;
+  for (let c = 0; c < width; c++) {
+    const hit = rows.filter(r => known.has(norm(r[c] || ""))).length;
+    if (hit > best) { best = hit; idCol = c; }
+  }
+  if (idCol < 0) {
+    wrap.innerHTML = '<div class="notice bad">붙여넣은 값에서 명렬의 학번을 하나도 찾지 못했습니다. 학번 열이 함께 선택됐는지 확인해 주세요.</div>';
+    return;
+  }
+
+  // 값 열: 학번 열과 이름 열을 뺀 나머지 중 숫자 비율이 가장 높은 열.
+  // 학번·이름·점수 3열을 붙여넣는 경우가 흔한데, 단순히 "값이 많이 찬 열"로
+  // 고르면 이름 열을 점수로 읽어 버린다.
+  const knownNames = new Set(state.students.map(s => s.이름));
+  let valCol = -1, bestScore = -1;
+  for (let c = 0; c < width; c++) {
+    if (c === idCol) continue;
+    const cells = rows.map(r => (r[c] || "").trim()).filter(v => v !== "");
+    if (!cells.length) continue;
+    const nameHit = cells.filter(v => knownNames.has(v)).length / cells.length;
+    if (nameHit >= 0.5) continue;                       // 이름 열은 점수가 아니다
+    const numeric = cells.filter(v => /^-?\d+(\.\d+)?$/.test(v)).length / cells.length;
+    // 숫자 열을 우선하되, 등급만 있는 표(상/중/하)도 받을 수 있게 채움 비율을 보조로 쓴다
+    const rank = numeric * 10 + cells.length / rows.length;
+    if (rank > bestScore) { bestScore = rank; valCol = c; }
+  }
+  if (valCol < 0) {
+    wrap.innerHTML = '<div class="notice bad">점수 열을 찾지 못했습니다. 학번과 점수 두 열을 함께 붙여넣어 주세요.</div>';
+    return;
+  }
+
+  const items = [];
+  let unknown = 0, blank = 0, numeric = 0, graded = 0;
+  const seen = new Set();
+  rows.forEach(r => {
+    const sid = norm(r[idCol] || "");
+    const raw = (r[valCol] || "").trim();
+    if (!sid) return;
+    if (!known.has(sid)) { unknown++; return; }   // 헤더 줄이나 다른 반이 섞인 경우
+    if (seen.has(sid)) return;
+    seen.add(sid);
+    if (raw === "") { blank++; return; }
+    if (/^-?\d+(\.\d+)?$/.test(raw)) { items.push({ 학번: sid, 점수: Number(raw) }); numeric++; }
+    else { items.push({ 학번: sid, 등급: raw }); graded++; }
+  });
+
+  const notes = [];
+  if (numeric && graded)
+    notes.push(["bad", `숫자 점수 ${numeric}건과 등급 ${graded}건이 섞여 있습니다. 한 가지로 통일해 주세요.`]);
+  const missing = state.students.filter(s => s.제출 && !seen.has(s.학번)).length;
+  if (missing) notes.push(["warn", `제출자 중 점수가 붙여넣기에 없는 학생 ${missing}명.`]);
+  if (unknown) notes.push(["warn", `명렬에 없는 학번 ${unknown}줄을 건너뛰었습니다(헤더 줄이거나 다른 반일 수 있습니다).`]);
+  if (blank) notes.push(["warn", `점수 칸이 빈 학생 ${blank}명.`]);
+  wrap.innerHTML = notes.map(([k, m]) => `<div class="notice ${k}">${m}</div>`).join("");
+
+  state.scores = (numeric && graded) ? [] : items;
+
+  stats.innerHTML = [
+    ["", `${items.length}명`],
+    [missing ? "warn" : "", `누락 ${missing}`],
+    [unknown ? "warn" : "", `제외 ${unknown}`],
+  ].map(([k, t]) => `<span class="chip ${k}">${t}</span>`).join("");
+
+  const tally = {};
+  items.forEach(it => {
+    const key = "점수" in it ? it.점수 : it.등급;
+    tally[key] = (tally[key] || 0) + 1;
+  });
+  const keys = Object.keys(tally).sort((a, b) =>
+    (isNaN(a) || isNaN(b)) ? String(a).localeCompare(b) : Number(b) - Number(a));
+  dist.textContent = keys.length
+    ? "분포 — " + keys.map(k => `${k}${numeric ? "점" : ""} ${tally[k]}명`).join(", ")
+    : "";
+}
 
 function parse() {
   const rows = splitRows(document.getElementById("src").value);
@@ -235,7 +342,9 @@ function parse() {
 
   render();
   result.hidden = false;
+  document.getElementById("scorecard").hidden = students.length === 0;
   savecard.hidden = students.length === 0;
+  parseScores();
 }
 
 function render() {
@@ -266,13 +375,13 @@ document.getElementById("tbody").addEventListener("change", e => {
   const i = e.target.dataset.i;
   if (i === undefined) return;
   state.students[i].제출 = e.target.checked;
-  render();
+  render(); parseScores();
 });
 document.getElementById("allon").addEventListener("click", () => {
-  state.students.forEach(s => s.제출 = true); render();
+  state.students.forEach(s => s.제출 = true); render(); parseScores();
 });
 document.getElementById("alloff").addEventListener("click", () => {
-  state.students.forEach(s => s.제출 = false); render();
+  state.students.forEach(s => s.제출 = false); render(); parseScores();
 });
 document.getElementById("save").addEventListener("click", () => {
   const students = state.students.map(({ 학번, 이름 }) => ({ 학번, 이름 }));
@@ -291,9 +400,16 @@ document.getElementById("save").addEventListener("click", () => {
   download("제출자.json", {
     학번목록: state.students.filter(s => s.제출).map(s => s.학번),
   });
+  let scoreNote = "";
+  if (state.scores.length) {
+    download("점수원본.json", { 항목: state.scores });
+    scoreNote = `, 점수 ${state.scores.length}명`;
+  }
   document.getElementById("saved").textContent =
-    `저장했습니다 — 명렬 ${students.length}명, 제출자 ${state.students.filter(s => s.제출).length}명`;
+    `저장했습니다 — 명렬 ${students.length}명, 제출자 ${state.students.filter(s => s.제출).length}명${scoreNote}`;
 });
+
+document.getElementById("scoresrc").addEventListener("input", parseScores);
 </script>
 </body>
 </html>
