@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>세특 작업 도구 — seteuk-harness</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1a1a18; --muted: #6b6b64; --line: #e2e2dd;
+    --card: #fff; --accent: #2f6f4e; --warn: #9a6b00; --bad: #a33a2a;
+    --warnbg: #fdf6e3; --badbg: #fdeeeb; --okbg: #eef5f0; --src: #f4f4f1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --fg: #e8e8e4; --muted: #9a9a92; --line: #2e3034;
+      --card: #1e1f23; --accent: #7fb99a; --warn: #d8b25e; --bad: #e08b7a;
+      --warnbg: #2a2418; --badbg: #2b1c19; --okbg: #1b241f; --src: #191a1e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 4rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 "Malgun Gothic", "맑은 고딕", -apple-system, system-ui, sans-serif;
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 1.5rem 1.25rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .88rem; margin: 0 0 1.5rem; }
+
+  /* 탭 */
+  .tabs {
+    position: sticky; top: 0; z-index: 20; background: var(--bg);
+    border-bottom: 1px solid var(--line); display: flex; gap: .25rem;
+    padding: 0 1.25rem; max-width: 1180px; margin: 0 auto;
+  }
+  .tabs button {
+    border: none; background: none; color: var(--muted); cursor: pointer;
+    font: inherit; font-size: .93rem; padding: .8rem .9rem;
+    border-bottom: 2px solid transparent; border-radius: 0;
+  }
+  .tabs button[aria-selected="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
+  section[hidden] { display: none; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.15rem; margin-bottom: 1rem;
+  }
+  .card.done { opacity: .55; }
+  .card.flag { border-color: var(--warn); }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--muted); margin: 0 0 .8rem; font-weight: 600; }
+  h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 0 0 .4rem; font-weight: 600; }
+
+  textarea {
+    width: 100%; min-height: 180px; padding: .72rem; border: 1px solid var(--line);
+    border-radius: 7px; background: var(--bg); color: var(--fg); resize: vertical;
+    font: 13px/1.5 Consolas, "D2Coding", monospace;
+  }
+  textarea.prose { font: 15px/1.7 inherit; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  .hint { color: var(--muted); font-size: .85rem; margin: .6rem 0 0; }
+  .stats { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .85rem; }
+  .chip { padding: .3rem .7rem; border-radius: 999px; font-size: .85rem;
+          background: var(--okbg); border: 1px solid var(--line); }
+  .chip.warn { background: var(--warnbg); color: var(--warn); border-color: transparent; }
+  .chip.bad  { background: var(--badbg); color: var(--bad); border-color: transparent; }
+  .tag { font-size: .76rem; padding: .15rem .5rem; border-radius: 999px;
+         background: var(--okbg); border: 1px solid var(--line); color: var(--muted); }
+  .tag.flag { background: var(--warnbg); color: var(--warn); border-color: transparent; }
+  .tag.ex   { background: var(--badbg); color: var(--bad); border-color: transparent; }
+  .notice { padding: .7rem .85rem; border-radius: 7px; font-size: .9rem; margin-bottom: .6rem; }
+  .notice.warn { background: var(--warnbg); color: var(--warn); }
+  .notice.bad  { background: var(--badbg); color: var(--bad); }
+
+  .tablewrap { overflow-x: auto; max-height: 420px; overflow-y: auto;
+               border: 1px solid var(--line); border-radius: 7px; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { padding: .4rem .7rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--card); font-weight: 600; font-size: .8rem; color: var(--muted); }
+  tr:last-child td { border-bottom: none; }
+  tr.dup td { background: var(--badbg); }
+  tr.absent td:not(:last-child) { opacity: .45; text-decoration: line-through; }
+  td.check { text-align: center; }
+  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: 1rem; }
+  button {
+    font: inherit; font-size: .9rem; padding: .52rem 1.05rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  input[type=file] { font-size: .87rem; }
+
+  /* 검수 */
+  .bar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: 1.2rem; }
+  .bar .grow { flex: 1 1 auto; }
+  .prog { font-size: .87rem; color: var(--muted); }
+  .prog b { color: var(--fg); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; }
+  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
+  .source { background: var(--src); border: 1px solid var(--line); border-radius: 7px;
+            padding: .7rem; max-height: 260px; overflow-y: auto;
+            font-size: .87rem; white-space: pre-wrap; word-break: break-word; }
+  .who { font-weight: 600; }
+  .head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; margin-bottom: .7rem; }
+  .meta { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
+          margin-top: .5rem; font-size: .85rem; color: var(--muted); }
+  .meta .over { color: var(--bad); font-weight: 600; }
+  .hits { color: var(--bad); }
+  .memo { width: 100%; margin-top: .5rem; padding: .45rem .6rem; font: inherit; font-size: .87rem;
+          border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: var(--fg); }
+  .foot { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; margin-top: .7rem; }
+  label.chk { display: flex; gap: .4rem; align-items: center; font-size: .88rem; cursor: pointer; }
+
+  .privacy { font-size: .85rem; color: var(--muted); border-top: 1px solid var(--line);
+             padding-top: 1rem; margin-top: 2rem; }
+  code { background: var(--src); padding: .1rem .35rem; border-radius: 4px; font-size: .88em; }
+</style>
+</head>
+<body>
+
+<nav class="tabs">
+  <button id="tab-a" aria-selected="true">명단과 점수</button>
+  <button id="tab-b" aria-selected="false">검수</button>
+</nav>
+
+<main>
+<!-- ═══════════════════ 탭 A · 명단과 점수 ═══════════════════ -->
+<section id="pane-a">
+  <h1>명단과 점수</h1>
+  <p class="sub">엑셀에서 학번·이름 두 열을 <strong>함께</strong> 선택해 붙여넣으세요. 따로 붙여넣으면 행이 어긋납니다.</p>
+
+  <div class="card">
+    <h2>1 · 붙여넣기</h2>
+    <textarea id="src" spellcheck="false" placeholder="30101&#9;김OO&#10;30102&#9;이OO&#10;30103&#9;박OO"></textarea>
+    <p class="hint">헤더 줄(학번·이름)이 있어도 되고 없어도 됩니다. 열 순서도 알아서 판별합니다.</p>
+  </div>
+
+  <div class="card" id="result" hidden>
+    <h2>2 · 확인</h2>
+    <div id="notices"></div>
+    <div class="stats" id="stats"></div>
+    <p class="hint" id="colnote"></p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:3.5rem">순번</th><th>학번</th><th>이름</th><th style="width:5rem">제출</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="actions">
+      <button id="allon">전원 제출로</button>
+      <button id="alloff">전원 미제출로</button>
+      <span class="hint" id="submitnote"></span>
+    </div>
+  </div>
+
+  <div class="card" id="scorecard" hidden>
+    <h2>3 · 점수 (선택)</h2>
+    <p class="hint" style="margin-top:0">
+      채점표에서 <strong>학번과 점수 두 열을 함께</strong> 긁어 붙여넣으세요.
+      비워 두면 점수 없이 진행합니다(등급만 있으면 등급을 그대로 적어도 됩니다).
+    </p>
+    <textarea id="scoresrc" spellcheck="false" style="min-height:130px"
+              placeholder="30101&#9;15&#10;30102&#9;13&#10;30103&#9;상"></textarea>
+    <div id="scorenotices" style="margin-top:.85rem"></div>
+    <div class="stats" id="scorestats"></div>
+    <p class="hint" id="scoredist"></p>
+  </div>
+
+  <div class="card" id="savecard" hidden>
+    <h2>4 · 저장</h2>
+    <p class="hint">저장 위치를 물으면 <strong>활동 폴더</strong>를 고르세요. 위치를 묻지 않는 브라우저에서는 내려받기 폴더로 떨어지니 활동 폴더로 옮겨 주세요.</p>
+    <div class="actions">
+      <button class="primary" id="save">저장</button>
+      <span class="hint" id="saved"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 탭 B · 검수 ═══════════════════ -->
+<section id="pane-b" hidden>
+  <h1>세특 검수</h1>
+  <p class="sub">
+    <code>검수번들.json</code>을 불러 원문과 세특을 나란히 보며 고칩니다.
+    저장하면 <b>실명 검수본</b>(로컬 보관용)과 <b>토큰 diff</b>(AI에게 줄 것)가 함께 나옵니다.
+  </p>
+
+  <div class="bar">
+    <input type="file" id="rv-load" accept=".json">
+    <span class="grow"></span>
+    <span class="prog" id="rv-prog"></span>
+    <button id="rv-onlyflag">우선 검토만</button>
+    <button class="primary" id="rv-save" disabled>검수본 저장</button>
+    <span class="prog" id="rv-saved"></span>
+  </div>
+
+  <div id="rv-head"></div>
+  <div id="rv-list"></div>
+</section>
+
+<p class="privacy">
+  이 페이지는 <strong>서버가 없습니다.</strong> 인터넷을 끊어도 동작하며, 붙여넣거나 불러온 명단·원문은
+  이 브라우저 밖으로 나가지 않습니다. 저장 버튼은 이 컴퓨터에 파일을 쓸 뿐 어디에도 전송하지 않습니다.
+  <br><b>명렬.json·점수원본.json·검수본.json에는 실명이 들어 있으므로 AI에게 주지 마십시오</b> —
+  AI에게 줄 것은 <code>검수diff.json</code>뿐입니다. 검수가 끝나면
+  <code>pseudonymize.py destroy --dir &lt;활동폴더&gt; --yes</code>로 중간 파일을 파기하세요.
+</p>
+</main>
+
+<script>
+"use strict";
+/* ───────────────────────── 공통 ───────────────────────── */
+const norm = s => (s || "").replace(/\s+/g, "");
+const isDigits = s => /^\d+$/.test(norm(s));
+const hasKorean = s => /[가-힣]/.test(s || "");
+const esc = s => String(s == null ? "" : s)
+  .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const U8 = s => new TextEncoder().encode(s || "").length;
+/** 엑셀 =(LENB-LEN)*2+LEN 과 같은 셈(한글 2바이트). 기준이 확정되면 하나로 줄인다. */
+const B2 = s => [...(s || "")].reduce((n, c) => n + (c.codePointAt(0) > 127 ? 2 : 1), 0);
+
+/** 붙여넣은 텍스트를 표로 쪼갠다. 탭 → 여러 칸 → 쉼표 순으로 시도한다. */
+function splitRows(text) {
+  const lines = (text || "").split(/\r?\n/).filter(l => l.trim() !== "");
+  if (!lines.length) return [];
+  const pick = lines.some(l => l.includes("\t")) ? /\t/
+             : lines.some(l => /\s{2,}/.test(l)) ? /\s{2,}/
+             : lines.some(l => l.includes(",")) ? /\s*,\s*/
+             : /\s+/;
+  return lines.map(l => l.split(pick).map(c => c.trim()));
+}
+
+function median(xs) {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+}
+
+/**
+ * 파일을 저장한다. 브라우저가 저장 위치 선택을 지원하면 그쪽을 쓰고,
+ * 안 되면 내려받기로 떨어뜨린다 — 로컬 파일(file://)에서는 위치 선택이
+ * 막혀 있는 브라우저가 있어 어느 쪽이든 동작하게 둔다.
+ */
+async function saveFile(name, obj) {
+  const text = JSON.stringify(obj, null, 1);
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+      });
+      const w = await handle.createWritable();
+      await w.write(text);
+      await w.close();
+      return "선택한 위치";
+    } catch (err) {
+      if (err && err.name === "AbortError") return null;   // 사용자가 취소함
+      // 그 밖의 실패는 내려받기로 넘어간다
+    }
+  }
+  const blob = new Blob([text], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return "내려받기 폴더";
+}
+
+/* 탭 — 화면만 바꾼다. 탭 사이에 자료를 저장하지 않는다(실명이 브라우저에 눌러앉지 않게). */
+function showTab(which) {
+  document.getElementById("pane-a").hidden = which !== "a";
+  document.getElementById("pane-b").hidden = which !== "b";
+  document.getElementById("tab-a").setAttribute("aria-selected", String(which === "a"));
+  document.getElementById("tab-b").setAttribute("aria-selected", String(which === "b"));
+}
+document.getElementById("tab-a").addEventListener("click", () => showTab("a"));
+document.getElementById("tab-b").addEventListener("click", () => showTab("b"));
+
+/* ─────────────────── 탭 A · 명단과 점수 ─────────────────── */
+const ROSTER = (() => {
+  const HEADER_ID = ["학번", "번호", "학생번호", "학년반번호"];
+  const HEADER_NAME = ["이름", "성명", "학생명"];
+  const state = { students: [], scores: [] };
+
+  /**
+   * 어느 열이 학번이고 어느 열이 이름인지 정한다.
+   * 헤더가 있으면 헤더를 믿고, 없으면 값의 생김새로 판정한다 —
+   * "번호"라는 글자는 모호해도 값이 1..30인지 30101..인지는 분명하다.
+   */
+  function pickColumns(rows) {
+    const width = Math.max(...rows.map(r => r.length));
+    const head = rows[0].map(norm);
+    const headerId = head.findIndex(c => HEADER_ID.includes(c));
+    const headerName = head.findIndex(c => HEADER_NAME.includes(c));
+    if (headerId >= 0 && headerName >= 0) {
+      return { id: headerId, name: headerName, body: rows.slice(1), via: "헤더" };
+    }
+    const body = rows;
+    const score = [];
+    for (let c = 0; c < width; c++) {
+      const cells = body.map(r => r[c] || "").filter(v => v !== "");
+      if (!cells.length) { score.push(null); continue; }
+      const digits = cells.filter(isDigits);
+      score.push({
+        c,
+        digitRatio: digits.length / cells.length,
+        koreanRatio: cells.filter(hasKorean).length / cells.length,
+        medianLen: digits.length ? median(digits.map(v => norm(v).length)) : 0,
+      });
+    }
+    const cand = score.filter(Boolean);
+    // 학번: 숫자 비율이 높고, 그중 자릿수가 긴 열(출석번호 1~2자리보다 학번 5자리 우선)
+    const idCol = cand.filter(s => s.digitRatio >= 0.8)
+                      .sort((a, b) => b.medianLen - a.medianLen || b.digitRatio - a.digitRatio)[0];
+    const nameCol = cand.filter(s => s.koreanRatio >= 0.6 && (!idCol || s.c !== idCol.c))
+                        .sort((a, b) => b.koreanRatio - a.koreanRatio)[0];
+    if (!idCol || !nameCol) return null;
+    return { id: idCol.c, name: nameCol.c, body, via: "값 판별", idLen: idCol.medianLen };
+  }
+
+  /**
+   * 점수 붙여넣기를 읽는다. 명렬을 이미 갖고 있으므로 학번 열을 명렬과 대조해 고른다 —
+   * 채점표에서 어느 숫자 열이 점수인지 헷갈릴 일이 없어진다.
+   */
+  function parseScores() {
+    const wrap = document.getElementById("scorenotices");
+    const stats = document.getElementById("scorestats");
+    const dist = document.getElementById("scoredist");
+    wrap.innerHTML = ""; stats.innerHTML = ""; dist.textContent = "";
+    state.scores = [];
+
+    const rows = splitRows(document.getElementById("scoresrc").value);
+    if (!rows.length) return;
+
+    const known = new Set(state.students.map(s => s.학번));
+    const width = Math.max(...rows.map(r => r.length));
+
+    // 학번 열: 명렬과 가장 많이 일치하는 열
+    let idCol = -1, best = 0;
+    for (let c = 0; c < width; c++) {
+      const hit = rows.filter(r => known.has(norm(r[c] || ""))).length;
+      if (hit > best) { best = hit; idCol = c; }
+    }
+    if (idCol < 0) {
+      wrap.innerHTML = '<div class="notice bad">붙여넣은 값에서 명렬의 학번을 하나도 찾지 못했습니다. 학번 열이 함께 선택됐는지 확인해 주세요.</div>';
+      return;
+    }
+
+    // 값 열: 학번 열과 이름 열을 뺀 나머지 중 숫자 비율이 가장 높은 열.
+    // 학번·이름·점수 3열을 붙여넣는 경우가 흔한데, 단순히 "값이 많이 찬 열"로
+    // 고르면 이름 열을 점수로 읽어 버린다.
+    const knownNames = new Set(state.students.map(s => s.이름));
+    let valCol = -1, bestScore = -1;
+    for (let c = 0; c < width; c++) {
+      if (c === idCol) continue;
+      const cells = rows.map(r => (r[c] || "").trim()).filter(v => v !== "");
+      if (!cells.length) continue;
+      const nameHit = cells.filter(v => knownNames.has(v)).length / cells.length;
+      if (nameHit >= 0.5) continue;                       // 이름 열은 점수가 아니다
+      const numeric = cells.filter(v => /^-?\d+(\.\d+)?$/.test(v)).length / cells.length;
+      // 숫자 열을 우선하되, 등급만 있는 표(상/중/하)도 받을 수 있게 채움 비율을 보조로 쓴다
+      const rank = numeric * 10 + cells.length / rows.length;
+      if (rank > bestScore) { bestScore = rank; valCol = c; }
+    }
+    if (valCol < 0) {
+      wrap.innerHTML = '<div class="notice bad">점수 열을 찾지 못했습니다. 학번과 점수 두 열을 함께 붙여넣어 주세요.</div>';
+      return;
+    }
+
+    const items = [];
+    let unknown = 0, blank = 0, numeric = 0, graded = 0;
+    const seen = new Set();
+    rows.forEach(r => {
+      const sid = norm(r[idCol] || "");
+      const raw = (r[valCol] || "").trim();
+      if (!sid) return;
+      if (!known.has(sid)) { unknown++; return; }   // 헤더 줄이나 다른 반이 섞인 경우
+      if (seen.has(sid)) return;
+      seen.add(sid);
+      if (raw === "") { blank++; return; }
+      if (/^-?\d+(\.\d+)?$/.test(raw)) { items.push({ 학번: sid, 점수: Number(raw) }); numeric++; }
+      else { items.push({ 학번: sid, 등급: raw }); graded++; }
+    });
+
+    const notes = [];
+    if (numeric && graded)
+      notes.push(["bad", `숫자 점수 ${numeric}건과 등급 ${graded}건이 섞여 있습니다. 한 가지로 통일해 주세요.`]);
+    const missing = state.students.filter(s => s.제출 && !seen.has(s.학번)).length;
+    if (missing) notes.push(["warn", `제출자 중 점수가 붙여넣기에 없는 학생 ${missing}명.`]);
+    if (unknown) notes.push(["warn", `명렬에 없는 학번 ${unknown}줄을 건너뛰었습니다(헤더 줄이거나 다른 반일 수 있습니다).`]);
+    if (blank) notes.push(["warn", `점수 칸이 빈 학생 ${blank}명.`]);
+    wrap.innerHTML = notes.map(([k, m]) => `<div class="notice ${k}">${m}</div>`).join("");
+
+    state.scores = (numeric && graded) ? [] : items;
+
+    stats.innerHTML = [
+      ["", `${items.length}명`],
+      [missing ? "warn" : "", `누락 ${missing}`],
+      [unknown ? "warn" : "", `제외 ${unknown}`],
+    ].map(([k, t]) => `<span class="chip ${k}">${t}</span>`).join("");
+
+    const tally = {};
+    items.forEach(it => {
+      const key = "점수" in it ? it.점수 : it.등급;
+      tally[key] = (tally[key] || 0) + 1;
+    });
+    const keys = Object.keys(tally).sort((a, b) =>
+      (isNaN(a) || isNaN(b)) ? String(a).localeCompare(b) : Number(b) - Number(a));
+    dist.textContent = keys.length
+      ? "분포 — " + keys.map(k => `${k}${numeric ? "점" : ""} ${tally[k]}명`).join(", ")
+      : "";
+  }
+
+  function parse() {
+    const rows = splitRows(document.getElementById("src").value);
+    const result = document.getElementById("result");
+    const savecard = document.getElementById("savecard");
+    if (rows.length < 1) { result.hidden = true; savecard.hidden = true; return; }
+
+    const cols = pickColumns(rows);
+    const notices = document.getElementById("notices");
+    notices.innerHTML = "";
+    if (!cols) {
+      result.hidden = false; savecard.hidden = true;
+      document.getElementById("stats").innerHTML = "";
+      document.getElementById("tbody").innerHTML = "";
+      document.getElementById("colnote").textContent = "";
+      notices.innerHTML = '<div class="notice bad">학번 열과 이름 열을 찾지 못했습니다. 엑셀에서 두 열을 함께 선택해 다시 붙여넣어 주세요.</div>';
+      return;
+    }
+
+    const seen = new Map();
+    const students = [];
+    let blank = 0, dup = 0;
+    cols.body.forEach(r => {
+      const sid = norm(r[cols.id] || "");
+      const name = (r[cols.name] || "").trim();
+      if (!sid && !name) return;
+      if (!sid || !name) { blank++; return; }
+      const isDup = seen.has(sid);
+      if (isDup) dup++;
+      seen.set(sid, true);
+      students.push({ 학번: sid, 이름: name, 제출: true, 중복: isDup });
+    });
+
+    state.students = students;
+
+    const notes = [];
+    if (dup > 0) notes.push(["bad", `학번이 겹치는 행이 ${dup}개 있습니다. 여러 반을 함께 붙여넣었거나 출석번호를 학번으로 쓴 표일 수 있습니다.`]);
+    if (blank > 0) notes.push(["warn", `학번이나 이름이 빈 행 ${blank}개를 건너뛰었습니다.`]);
+    if (cols.via === "값 판별" && cols.idLen && cols.idLen <= 2)
+      notes.push(["warn", "학번으로 고른 열의 값이 1~2자리입니다. 출석번호일 수 있으니 학번 열이 따로 있는지 확인해 주세요."]);
+    notices.innerHTML = notes.map(([k, m]) => `<div class="notice ${k}">${m}</div>`).join("");
+
+    document.getElementById("stats").innerHTML = [
+      ["", `${students.length}명`],
+      [dup ? "bad" : "", `중복 ${dup}`],
+      [blank ? "warn" : "", `빈칸 ${blank}`],
+    ].map(([k, t]) => `<span class="chip ${k}">${t}</span>`).join("");
+    document.getElementById("colnote").textContent =
+      `열 판별: ${cols.via} — ${cols.id + 1}번째 열을 학번, ${cols.name + 1}번째 열을 이름으로 읽었습니다.`;
+
+    render();
+    result.hidden = false;
+    document.getElementById("scorecard").hidden = students.length === 0;
+    savecard.hidden = students.length === 0;
+    parseScores();
+  }
+
+  function render() {
+    document.getElementById("tbody").innerHTML = state.students.map((s, i) => `
+      <tr class="${s.중복 ? "dup" : ""} ${s.제출 ? "" : "absent"}">
+        <td>${i + 1}</td><td>${esc(s.학번)}</td><td>${esc(s.이름)}</td>
+        <td class="check"><input type="checkbox" data-i="${i}" ${s.제출 ? "checked" : ""}></td>
+      </tr>`).join("");
+    const absent = state.students.filter(s => !s.제출).length;
+    document.getElementById("submitnote").textContent =
+      absent ? `미제출 ${absent}명 — 활동 참여 사실만 담은 예외 세특으로 처리됩니다.` : "전원 제출";
+  }
+
+  document.getElementById("src").addEventListener("input", parse);
+  document.getElementById("scoresrc").addEventListener("input", parseScores);
+  document.getElementById("tbody").addEventListener("change", e => {
+    const i = e.target.dataset.i;
+    if (i === undefined) return;
+    state.students[i].제출 = e.target.checked;
+    render(); parseScores();
+  });
+  document.getElementById("allon").addEventListener("click", () => {
+    state.students.forEach(s => s.제출 = true); render(); parseScores();
+  });
+  document.getElementById("alloff").addEventListener("click", () => {
+    state.students.forEach(s => s.제출 = false); render(); parseScores();
+  });
+  document.getElementById("save").addEventListener("click", async () => {
+    const btn = document.getElementById("save");
+    const saved = document.getElementById("saved");
+    const students = state.students.map(({ 학번, 이름 }) => ({ 학번, 이름 }));
+    const dup = state.students.filter(s => s.중복).length;
+    const 확인사유 = [];
+    if (dup) 확인사유.push(`학번이 겹치는 행 ${dup}개를 붙여넣었습니다.`);
+
+    const files = [
+      ["명렬.json", {
+        students, 출처: "도구.html (붙여넣기)", 방식: "붙여넣기",
+        확인필요: 확인사유.length > 0, 확인사유, 건너뜀: 0, 중복: dup,
+      }],
+      ["제출자.json", { 학번목록: state.students.filter(s => s.제출).map(s => s.학번) }],
+    ];
+    if (state.scores.length) files.push(["점수원본.json", { 항목: state.scores }]);
+
+    btn.disabled = true;
+    const where = [];
+    try {
+      for (const [name, obj] of files) {
+        saved.textContent = `${name} 저장 중…`;
+        const place = await saveFile(name, obj);
+        if (place === null) { saved.textContent = "저장을 취소했습니다."; return; }
+        where.push(place);
+      }
+    } finally { btn.disabled = false; }
+
+    const scoreNote = state.scores.length ? `, 점수 ${state.scores.length}명` : "";
+    saved.textContent =
+      `저장했습니다(${where[where.length - 1]}) — 명렬 ${students.length}명, ` +
+      `제출자 ${state.students.filter(s => s.제출).length}명${scoreNote}`;
+  });
+
+  return { splitRows, pickColumns, parseScores, parse, state };
+})();
+
+/* ───────────────────── 탭 B · 검수 ───────────────────── */
+const REVIEW = (() => {
+  let data = null;            // 불러온 번들
+  let original = new Map();   // 토큰(없으면 학번) → 원래 세특·비고
+  let onlyFlag = false;
+
+  const keyOf = s => s.토큰 || `학번:${s.학번}`;
+
+  /**
+   * 금지 어휘와 금지 문자를 찾는다.
+   * 금지문자패턴은 정규식이다 — 문자 목록처럼 부분일치로 검사하면 패턴 문자열
+   * 자체가 본문에 나올 리 없어 아무것도 잡지 못한다(실제로 그렇게 새어 있었다).
+   */
+  function bannedHits(text) {
+    const hits = [];
+    for (const w of (data.금지어 || [])) if (w && text.includes(w)) hits.push(w);
+    const pat = data.금지문자패턴;
+    if (pat) {
+      try {
+        for (const c of new Set(text.match(new RegExp(pat, "gu")) || [])) hits.push(c);
+      } catch (err) {
+        hits.push(`(금지문자 패턴 오류: ${err.message})`);   // 조용히 넘기지 않는다
+      }
+    }
+    return hits;
+  }
+
+  function load(json) {
+    data = json;
+    original = new Map();
+    (data.students || []).forEach(s => {
+      original.set(keyOf(s), { 세특: s.세특 || "", 비고: s.비고 || "" });
+      s.검수완료 = false;
+      s.검수메모 = "";
+    });
+    // 우선 검토 대상을 위로 — 균등 검토는 균등하게 대충 보는 검토가 되기 쉽다.
+    data.students.sort((a, b) => (b.우선검토?.length || 0) - (a.우선검토?.length || 0));
+    document.getElementById("rv-save").disabled = false;
+    renderHead();
+    render();
+  }
+
+  function renderHead() {
+    const flagged = data.students.filter(s => s.우선검토?.length).length;
+    document.getElementById("rv-head").innerHTML = data.활동명
+      ? `<div class="notice warn">${esc(data.활동명)} · 총 ${data.students.length}명 중 우선 검토 <b>${flagged}명</b>.
+         목표 ${data.목표바이트 ?? "?"} / 상한 ${data.상한바이트 ?? "?"} 바이트.
+         바이트는 UTF-8과 2바이트 기준을 함께 보여 줍니다(기준 확정 전).</div>`
+      : "";
+  }
+
+  function render() {
+    const shown = data.students.filter(s => !onlyFlag || s.우선검토?.length);
+    document.getElementById("rv-list").innerHTML = shown.map(s => {
+      const idx = data.students.indexOf(s);
+      const tags = [
+        s.반 ? `<span class="tag">${esc(s.반)}</span>` : "",
+        s.톤등급 ? `<span class="tag">톤 ${esc(s.톤등급)}</span>` : "",
+        s.예외 ? `<span class="tag ex">예외</span>` : "",
+        ...(s.우선검토 || []).map(r => `<span class="tag flag">${esc(r)}</span>`),
+      ].join("");
+      return `
+      <div class="card ${s.우선검토?.length ? "flag" : ""} ${s.검수완료 ? "done" : ""}">
+        <div class="head">
+          <span class="who">${esc(s.학번)} ${esc(s.이름)}</span>
+          ${s.핵심소재 ? `<span class="tag">${esc(s.핵심소재)}</span>` : ""}
+          ${tags}
+        </div>
+        <div class="split">
+          <div class="pane">
+            <h3>학생 원문</h3>
+            <div class="source">${esc(s.원문) || '<span style="opacity:.5">원문 없음</span>'}</div>
+          </div>
+          <div class="pane">
+            <h3>세특 (고치면 즉시 반영)</h3>
+            <textarea class="prose" data-i="${idx}">${esc(s.세특)}</textarea>
+            <div class="meta" id="rv-m${idx}"></div>
+            <input class="memo" data-i="${idx}" placeholder="검수 메모 — 왜 고쳤는지 적으면 다음 회차 규칙에 반영됩니다">
+          </div>
+        </div>
+        <div class="foot">
+          <label class="chk"><input type="checkbox" data-i="${idx}" ${s.검수완료 ? "checked" : ""}> 검수 완료</label>
+          ${s.비고 ? `<span class="prog">비고: ${esc(s.비고)}</span>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+    shown.forEach(s => meta(data.students.indexOf(s)));
+    progress();
+  }
+
+  function meta(i) {
+    const s = data.students[i];
+    const el = document.getElementById("rv-m" + i);
+    if (!el) return;
+    const u = U8(s.세특), b = B2(s.세특);
+    const over = data.상한바이트 && u > data.상한바이트;
+    const hits = bannedHits(s.세특);
+    const changed = original.get(keyOf(s))?.세특 !== s.세특;
+    el.innerHTML =
+      `<span class="${over ? "over" : ""}">${u} 바이트(UTF-8)</span>` +
+      `<span>${b} (2바이트 기준)</span>` +
+      (over ? `<span class="over">상한 ${data.상한바이트} 초과</span>` : "") +
+      (hits.length ? `<span class="hits">금지: ${hits.map(esc).join(", ")}</span>` : "") +
+      (changed ? `<span>수정됨</span>` : "");
+  }
+
+  function progress() {
+    const done = data.students.filter(s => s.검수완료).length;
+    const changed = data.students.filter(s => original.get(keyOf(s))?.세특 !== s.세특).length;
+    document.getElementById("rv-prog").innerHTML =
+      `검수 <b>${done}</b>/${data.students.length} · 수정 <b>${changed}</b>건`;
+  }
+
+  /**
+   * 저장할 두 파일을 만든다.
+   * 검수본 — 실명 포함, 초안.json과 같은 계약이라 verify_seteuk --save가 그대로 받는다.
+   * diff  — 토큰 기준. 실명·학번이 들어가지 않으며 AI는 이것만 읽는다.
+   */
+  function buildOutputs() {
+    const byClass = new Map();
+    for (const s of data.students) {
+      const name = s.반 || "1반";
+      if (!byClass.has(name)) byClass.set(name, []);
+      byClass.get(name).push({
+        학번: s.학번, 이름: s.이름, 핵심소재: s.핵심소재 || "",
+        톤등급: s.톤등급 || "", 세특: s.세특 || "",
+        비고: s.비고 || "", 예외: !!s.예외,
+      });
+    }
+    const 검수본 = { classes: [...byClass].map(([name, students]) => ({ name, students })) };
+
+    const 변경 = [];
+    for (const s of data.students) {
+      const o = original.get(keyOf(s)) || { 세특: "", 비고: "" };
+      if (o.세특 === s.세특 && !s.검수메모) continue;
+      변경.push({
+        토큰: s.토큰 || null,
+        톤등급: s.톤등급 || "",
+        예외: !!s.예외,
+        전: o.세특,
+        후: s.세특,
+        검수메모: s.검수메모 || "",
+        바이트변화: { 전: U8(o.세특), 후: U8(s.세특) },
+      });
+    }
+    return {
+      검수본,
+      diff: {
+        활동명: data.활동명 || "",
+        총원: data.students.length,
+        검수완료: data.students.filter(s => s.검수완료).length,
+        수정: 변경.length,
+        변경,
+      },
+    };
+  }
+
+  document.getElementById("rv-load").addEventListener("change", async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { load(JSON.parse(await f.text())); }
+    catch (err) { alert("검수번들.json을 읽지 못했습니다: " + err.message); }
+  });
+
+  document.getElementById("rv-list").addEventListener("input", e => {
+    const i = e.target.dataset.i;
+    if (i === undefined) return;
+    const s = data.students[i];
+    if (e.target.tagName === "TEXTAREA") { s.세특 = e.target.value; meta(i); progress(); }
+    else if (e.target.classList.contains("memo")) { s.검수메모 = e.target.value; }
+  });
+
+  document.getElementById("rv-list").addEventListener("change", e => {
+    const i = e.target.dataset.i;
+    if (i === undefined || e.target.type !== "checkbox") return;
+    data.students[i].검수완료 = e.target.checked;
+    e.target.closest(".card").classList.toggle("done", e.target.checked);
+    progress();
+  });
+
+  document.getElementById("rv-onlyflag").addEventListener("click", () => {
+    onlyFlag = !onlyFlag;
+    document.getElementById("rv-onlyflag").textContent = onlyFlag ? "전체 보기" : "우선 검토만";
+    render();
+  });
+
+  document.getElementById("rv-save").addEventListener("click", async () => {
+    const notDone = data.students.filter(s => !s.검수완료).length;
+    if (notDone && !confirm(`검수 완료 표시가 없는 학생이 ${notDone}명 있습니다. 그래도 저장할까요?`)) return;
+
+    const { 검수본, diff } = buildOutputs();
+    const btn = document.getElementById("rv-save");
+    const saved = document.getElementById("rv-saved");
+    btn.disabled = true;
+    let where = null;
+    try {
+      where = await saveFile("검수본.json", 검수본);
+      if (where === null) { saved.textContent = "저장 취소"; return; }
+      const w2 = await saveFile("검수diff.json", diff);
+      if (w2 === null) { saved.textContent = "diff 저장 취소"; return; }
+    } finally { btn.disabled = false; }
+
+    saved.textContent =
+      `저장함(${where}) — 수정 ${diff.변경.length}건. AI에게는 검수diff.json만 주세요.`;
+  });
+
+  return { load, buildOutputs, bannedHits, getData: () => data };
+})();
+
+window.addEventListener("beforeunload", e => {
+  const d = REVIEW.getData();
+  const dirty = ROSTER.state.students.length > 0 ||
+                (d && d.students.some(s => s.세특 !== undefined && s.검수메모));
+  if (dirty) { e.preventDefault(); e.returnValue = ""; }
+});
+
+window.TOOLS = { ROSTER, REVIEW, U8, B2, splitRows, esc };
+</script>
+</body>
+</html>

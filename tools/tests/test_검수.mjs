@@ -1,34 +1,11 @@
-// 검수 페이지의 계산·산출 로직을 DOM 없이 검증한다. 등장인물은 전부 가상이다.
-import { readFileSync } from "node:fs";
+// 검수 화면의 계산·산출 로직을 DOM 없이 검증한다. 등장인물은 전부 가상이다.
+import { loadTools, reporter, RULES } from "./harness.mjs";
 
-const html = readFileSync(new URL("../검수.html", import.meta.url), "utf-8");
 // 픽스처를 지어내지 말고 실제 규칙 정본에서 읽는다 — 내가 가정한 형태로
 // 테스트를 만들었다가 금지문자 검사가 무력한 것을 놓친 적이 있다.
-const RULES = JSON.parse(readFileSync(new URL("../../wiki/규칙.json", import.meta.url), "utf-8"));
-const js = html.split("<script>")[1].split("</script>")[0];
-
-// DOM 호출은 전부 무해한 껍데기로 받아넘긴다.
-const stub = () => ({
-  innerHTML: "", textContent: "", value: "", disabled: false, files: [],
-  addEventListener() {}, closest: () => ({ classList: { toggle() {} } }),
-  classList: { toggle() {} }, dataset: {},
-});
-const document = { getElementById: stub, createElement: stub, addEventListener() {} };
-const window = { addEventListener() {} };
-const alert = () => {};
-const confirm = () => true;
-
-const body = js.replace(/^"use strict";/, "");
-const mod = new Function(
-  "document", "window", "alert", "confirm",
-  body + "\nreturn { load, buildOutputs, U8, B2, bannedHits, getData: () => data };"
-)(document, window, alert, confirm);
-
-let pass = 0, fail = 0;
-const ok = (cond, label, extra = "") => {
-  if (cond) { pass++; console.log(`PASS  ${label}`); }
-  else { fail++; console.log(`★FAIL★  ${label} ${extra}`); }
-};
+const T = loadTools();
+const mod = { ...T.REVIEW, U8: T.U8, B2: T.B2 };
+const { ok, done } = reporter();
 
 const BUNDLE = () => ({
   활동명: "가상 활동",
@@ -111,5 +88,4 @@ out = mod.buildOutputs();
 ok(out.diff.변경.some(c => c.토큰 === null), "토큰 없는 학생의 수정도 담긴다");
 ok(out.검수본.classes.flatMap(c => c.students).length === 3, "검수본에 전원이 담긴다");
 
-console.log(`\n${pass} pass, ${fail} fail`);
-if (fail) process.exit(1);
+done();

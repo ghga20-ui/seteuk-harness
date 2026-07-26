@@ -1,33 +1,26 @@
-// 명렬입력.html의 열 판별 로직을 실제 붙여넣기 형태로 검증한다.
-// 학생 이름은 전부 가상이다.
-import { readFileSync } from "node:fs";
+// 명렬 붙여넣기의 열 판별을 검증한다. 등장인물은 전부 가상이다.
+import { loadTools, reporter } from "./harness.mjs";
 
-const html = readFileSync(
-  new URL("../명렬입력.html", import.meta.url),
-  "utf-8"
-);
-const js = html.split("<script>")[1].split("</script>")[0];
-// DOM 의존 부분을 잘라내고 순수 함수만 평가한다.
-const pure = js.slice(0, js.indexOf("let state ="));
-const mod = new Function(pure + "\nreturn { splitRows, pickColumns, isDigits, hasKorean };")();
+const { ROSTER } = loadTools();
+const { ok, done } = reporter();
 
 function run(label, text, expect) {
-  const rows = mod.splitRows(text);
-  const cols = mod.pickColumns(rows);
+  const rows = ROSTER.splitRows(text);
+  const cols = ROSTER.pickColumns(rows);
   if (!cols) {
-    console.log(`${expect.fail ? "PASS" : "★FAIL★"}  ${label} → 판별 실패`);
+    ok(!!expect.fail, `${label} → 판별 실패`);
     return;
   }
   const students = cols.body
     .map(r => ({ 학번: (r[cols.id] || "").replace(/\s+/g, ""), 이름: (r[cols.name] || "").trim() }))
     .filter(s => s.학번 && s.이름);
-  const ok =
+  const good =
+    !expect.fail &&
     students.length === expect.n &&
     students[0].학번 === expect.first[0] &&
     students[0].이름 === expect.first[1];
-  console.log(
-    `${ok ? "PASS" : "★FAIL★"}  ${label} → ${students.length}명, 첫행 ${students[0]?.학번}/${students[0]?.이름} (${cols.via})`
-  );
+  ok(good, `${label} (${cols.via})`,
+     `→ ${students.length}명, 첫행 ${students[0]?.학번}/${students[0]?.이름}`);
 }
 
 // 엑셀에서 두 열을 긁으면 탭으로 구분된다
@@ -40,8 +33,9 @@ run("탭 · 헤더 없음", "30101\t김가상\n30102\t이가상",
 run("이름이 앞 열", "김가상\t30101\n이가상\t30102",
   { n: 2, first: ["30101", "김가상"] });
 
-run("반·번호·학번·이름 4열", "학번\t이름\n2\t1\t30101\t김가상\n2\t2\t30102\t이가상"
-  .replace("학번\t이름\n", ""), { n: 2, first: ["30101", "김가상"] });
+// 반·번호·학번·이름이 함께 있으면 출석번호가 아니라 5자리 학번을 골라야 한다
+run("반·번호·학번·이름 4열", "2\t1\t30101\t김가상\n2\t2\t30102\t이가상",
+  { n: 2, first: ["30101", "김가상"] });
 
 run("공백 구분", "30101   김가상\n30102   이가상",
   { n: 2, first: ["30101", "김가상"] });
@@ -59,3 +53,5 @@ run("출석번호만 있는 표", "번호\t이름\n1\t김가상\n2\t이가상",
   { n: 2, first: ["1", "김가상"] });
 
 run("이름만 있음(학번 없음)", "김가상\n이가상", { fail: true });
+
+done();
