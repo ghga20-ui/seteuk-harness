@@ -21,7 +21,7 @@ def _run(*args):
 def _seed(tmp_path):
     """민감 산출물과 무관한 파일을 함께 놓는다."""
     names = ["매핑.json", "명렬.json", "관찰메모.json", "점수.json",
-             "점수원본.json", "제출자.json", "토큰본.json"]
+             "점수원본.json", "제출자.json", "토큰본.json", "검수번들.json"]
     for n in names:
         (tmp_path / n).write_text('{"x":1}', encoding="utf-8")
     (tmp_path / "세특초안.xlsx").write_bytes(b"keep me")
@@ -45,7 +45,7 @@ def test_yes_actually_destroys(tmp_path):
     assert proc.returncode == 0
     for n in names:
         assert not (tmp_path / n).exists(), f"{n}이 남아 있다"
-    assert "7" in proc.stdout
+    assert "8" in proc.stdout
 
 
 def test_unrelated_files_are_kept(tmp_path):

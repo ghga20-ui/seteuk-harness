@@ -1454,7 +1454,7 @@ MAPPING_GLOB = "매핑*.json"
 # 원장)도 매핑표와 마찬가지로 무기한 평문으로 남으면 안 되므로 파기·잔존
 # 감지 대상에 포함한다.
 SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수*.json",
-                   "토큰본*.json", "제출자*.json")
+                   "토큰본*.json", "제출자*.json", "검수번들*.json")
 
 
 def save_mapping(mapping: dict, path) -> None:
@@ -2107,6 +2107,143 @@ def _cmd_finalize(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# review-bundle — 회고(SKILL.md §9-2)가 요구하는 "초안과 검수용을 학번 키로
+# 매칭해 diff를 만든다"는 지금까지 CLI가 없어 에이전트가 실명 두 파일을 직접
+# 열어야 했다. 검수 자체를 브라우저로 옮기고 에이전트에게는 토큰 기준 diff만
+# 주기 위한 첫 조각이 이 번들이다 — 산출 파일은 실명을 담지만(로컬 전용),
+# 이 CLI의 stdout에는 이름·학번이 절대 등장하지 않는다.
+# ---------------------------------------------------------------------------
+
+_BIGO_REVIEW_KEYWORDS = ("검토 필요", "추정", "교정", "확인")
+
+
+def build_review_bundle(drafts: dict, mapping: dict, sources: dict | None = None,
+                         profile: dict | None = None, rules: dict | None = None) -> dict:
+    """실명 초안에 토큰을 붙여 브라우저 검수용 번들을 만든다.
+
+    드라프트의 각 학생에 매핑표의 토큰을 붙인다(브라우저가 나중에 토큰 기준
+    diff를 만들 수 있게). 매핑에 토큰이 없는 학번(미제출자 등)도 제외하지
+    않고 토큰을 None으로 두며, 조용히 검수 대상에서 빠지지 않도록 우선검토
+    사유를 붙인다.
+
+    sources가 주어지면(토큰본.json) 토큰으로 원문을 찾아 함께 싣는다. 원문
+    속 토큰은 reidentify로 학번으로 되돌린다 — 이 산출 파일 자체가 로컬 전용
+    이므로 학번이 보여도 안전하고, 검수자가 문맥을 읽기에도 그 편이 낫다.
+
+    profile은 활동명·목표바이트·상한바이트를 담는다(없으면 700/760 기본값).
+    rules는 wiki/규칙.json에서 읽은 금지어휘·금지문자패턴이다(없으면
+    verify_seteuk.load_rules()로 직접 읽는다) — 브라우저가 같은 규칙으로
+    금지어·금지문자를 표시할 수 있게 그대로 싣는다.
+
+    우선검토(판단이 필요해 검수 순서를 앞당길 사유)에는 최소한 다음을 담는다:
+    예외 학생, 비고에 '검토 필요'/'추정'/'교정'/'확인' 포함, 바이트가 상한의
+    95% 이상이거나 목표의 60% 이하, 매핑에 토큰이 없음. 해당 없으면 빈 목록.
+    """
+    profile = profile or {}
+    target = int(profile.get("목표바이트", 700))
+    limit = int(profile.get("상한바이트", 760))
+    activity = profile.get("활동명") or mapping.get("활동") or ""
+
+    if rules is None:
+        from verify_seteuk import load_rules
+        rules = load_rules()
+
+    금지어 = list(rules.get("금지어휘", []))
+    if rules.get("이는_경계검사", True) and "이는" not in 금지어:
+        금지어 = 금지어 + ["이는"]
+    금지문자패턴 = rules.get("금지문자패턴", "")
+    금지문자 = [금지문자패턴] if 금지문자패턴 else []
+
+    token_map = mapping.get("map", {})
+    source_by_token = {}
+    if sources is not None:
+        for item in sources.get("items", []):
+            tok = item.get("토큰")
+            if tok:
+                source_by_token[tok] = item.get("본문", "")
+
+    students_out = []
+    for cls in drafts.get("classes", []):
+        반 = cls.get("name", "")
+        for s in cls.get("students", []):
+            sid = str(s.get("학번", ""))
+            token = token_map.get(sid)
+            entry = {
+                "토큰": token,
+                "학번": sid,
+                "이름": s.get("이름", ""),
+                "반": 반,
+                "톤등급": s.get("톤등급", ""),
+                "핵심소재": s.get("핵심소재", ""),
+                "세특": s.get("세특", ""),
+                "비고": s.get("비고", ""),
+                "예외": bool(s.get("예외", False)),
+            }
+
+            reasons: list[str] = []
+            if entry["예외"]:
+                reasons.append("예외 학생")
+            비고 = entry["비고"] or ""
+            for kw in _BIGO_REVIEW_KEYWORDS:
+                if kw in 비고:
+                    reasons.append(f"비고에 '{kw}' 포함")
+
+            세특 = entry["세특"] or ""
+            nbytes = len(세특.encode("utf-8"))
+            if nbytes >= limit * 0.95:
+                reasons.append("분량 상한 근접")
+            elif nbytes <= target * 0.6:
+                reasons.append("분량 목표 대비 크게 미달")
+
+            if token is None:
+                reasons.append("매핑에 토큰 없음")
+
+            if sources is not None:
+                본문 = source_by_token.get(token, "") if token else ""
+                if 본문:
+                    entry["원문"] = reidentify(본문, mapping)
+
+            entry["우선검토"] = reasons
+            students_out.append(entry)
+
+    return {
+        "활동명": activity,
+        "목표바이트": target,
+        "상한바이트": limit,
+        "금지어": 금지어,
+        "금지문자": 금지문자,
+        "students": students_out,
+    }
+
+
+def _cmd_review_bundle(args) -> int:
+    try:
+        drafts = _read_json(args.drafts)
+    except (OSError, ValueError):
+        print("검수번들 생성 실패: 초안 파일을 읽지 못했습니다.")
+        return 1
+
+    total = sum(len(cls.get("students", [])) for cls in drafts.get("classes", []))
+    if total == 0:
+        print("검수번들 생성 실패: 초안에 학생이 없습니다.")
+        return 1
+
+    mapping = _read_json(args.mapping)
+    sources = _read_json(args.sources) if args.sources else None
+    profile = _read_json(args.profile) if args.profile else None
+
+    bundle = build_review_bundle(drafts, mapping, sources=sources, profile=profile)
+    _write_json(bundle, args.out)
+
+    n = len(bundle["students"])
+    priority = sum(1 for s in bundle["students"] if s.get("우선검토"))
+    with_source = sum(1 for s in bundle["students"] if s.get("원문"))
+    print(f"검수번들: {n}명(우선 검토 {priority}명, 원문 포함 {with_source}명). 저장: {args.out}")
+    print("주의: 이 파일은 실명을 담은 민감 산출물입니다 — 로컬 전용, 검수 후 destroy로 파기하세요.")
+    return 0
+
+
 def main(argv=None) -> int:
     import argparse
     import sys
@@ -2198,6 +2335,18 @@ def main(argv=None) -> int:
     p_finalize.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_finalize.add_argument("--out", required=True, help="실명초안.json 저장 경로")
     p_finalize.set_defaults(func=_cmd_finalize)
+
+    p_review = sub.add_parser("review-bundle", help="브라우저 검수용 번들 생성(실명 산출물)")
+    p_review.add_argument("--drafts", required=True,
+                          help='실명 초안 JSON({"classes":[{"name","students":[{"학번","이름",...}]}]})')
+    p_review.add_argument("--mapping", required=True, help="매핑.json 경로(토큰을 붙이는 데 필요)")
+    p_review.add_argument("--sources",
+                          help='토큰본.json 경로(선택, {"items":[{"토큰","본문"}]}). 있으면 학생별 '
+                               "원문을 함께 싣는다(원문 속 토큰은 학번으로 되돌려 싣는다)")
+    p_review.add_argument("--profile",
+                          help="활동프로파일.json 경로(선택). 없으면 기본값(700/760)을 쓴다")
+    p_review.add_argument("--out", required=True, help="검수번들.json 저장 경로(실명 포함 — 로컬 전용)")
+    p_review.set_defaults(func=_cmd_review_bundle)
 
     p_destroy = sub.add_parser("destroy", help="가명처리 중간 산출물 파기")
     p_destroy.add_argument("--dir", default=".", help="검사할 폴더(기본: 현재 폴더)")
