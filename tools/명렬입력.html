@@ -115,7 +115,7 @@
 
   <div class="card" id="savecard" hidden>
     <h2>4 · 저장</h2>
-    <p class="hint">내려받은 뒤 활동 폴더로 옮겨 주세요.</p>
+    <p class="hint">저장 위치를 물으면 <strong>활동 폴더</strong>를 고르세요. 위치를 묻지 않는 브라우저에서는 내려받기 폴더로 떨어지니 활동 폴더로 옮겨 주세요.</p>
     <div class="actions">
       <button class="primary" id="save">저장</button>
       <span class="hint" id="saved"></span>
@@ -124,7 +124,7 @@
 
   <p class="privacy">
     이 페이지는 <strong>서버가 없습니다.</strong> 인터넷 연결을 끊어도 동작하며, 붙여넣은 명단은
-    이 브라우저 밖으로 나가지 않습니다. 저장 버튼은 파일을 내려받을 뿐 어디에도 전송하지 않습니다.
+    이 브라우저 밖으로 나가지 않습니다. 저장 버튼은 이 컴퓨터에 파일을 쓸 뿐 어디에도 전송하지 않습니다.
     만들어진 <code>명렬.json</code>·<code>점수원본.json</code>은 실명·학번이 담긴 파일이므로, 세특 검수가 끝나면
     <code>pseudonymize.py destroy --dir &lt;활동폴더&gt; --yes</code>로 파기하세요.
   </p>
@@ -361,13 +361,35 @@ function render() {
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-function download(name, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 1)], { type: "application/json" });
+/**
+ * 파일을 저장한다. 브라우저가 저장 위치 선택을 지원하면 그쪽을 쓰고,
+ * 안 되면 내려받기로 떨어뜨린다 — 로컬 파일(file://)에서는 위치 선택이
+ * 막혀 있는 브라우저가 있어 어느 쪽이든 동작하게 둔다.
+ */
+async function saveFile(name, obj) {
+  const text = JSON.stringify(obj, null, 1);
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+      });
+      const w = await handle.createWritable();
+      await w.write(text);
+      await w.close();
+      return "선택한 위치";
+    } catch (err) {
+      if (err && err.name === "AbortError") return null;   // 사용자가 취소함
+      // 그 밖의 실패는 내려받기로 넘어간다
+    }
+  }
+  const blob = new Blob([text], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return "내려받기 폴더";
 }
 
 document.getElementById("src").addEventListener("input", parse);
@@ -383,30 +405,45 @@ document.getElementById("allon").addEventListener("click", () => {
 document.getElementById("alloff").addEventListener("click", () => {
   state.students.forEach(s => s.제출 = false); render(); parseScores();
 });
-document.getElementById("save").addEventListener("click", () => {
+document.getElementById("save").addEventListener("click", async () => {
+  const btn = document.getElementById("save");
+  const saved = document.getElementById("saved");
   const students = state.students.map(({ 학번, 이름 }) => ({ 학번, 이름 }));
   const dup = state.students.filter(s => s.중복).length;
   const 확인사유 = [];
   if (dup) 확인사유.push(`학번이 겹치는 행 ${dup}개를 붙여넣었습니다.`);
-  download("명렬.json", {
-    students,
-    출처: "명렬입력.html (붙여넣기)",
-    방식: "붙여넣기",
-    확인필요: 확인사유.length > 0,
-    확인사유,
-    건너뜀: 0,
-    중복: dup,
-  });
-  download("제출자.json", {
-    학번목록: state.students.filter(s => s.제출).map(s => s.학번),
-  });
-  let scoreNote = "";
-  if (state.scores.length) {
-    download("점수원본.json", { 항목: state.scores });
-    scoreNote = `, 점수 ${state.scores.length}명`;
+
+  const files = [
+    ["명렬.json", {
+      students,
+      출처: "명렬입력.html (붙여넣기)",
+      방식: "붙여넣기",
+      확인필요: 확인사유.length > 0,
+      확인사유,
+      건너뜀: 0,
+      중복: dup,
+    }],
+    ["제출자.json", { 학번목록: state.students.filter(s => s.제출).map(s => s.학번) }],
+  ];
+  if (state.scores.length) files.push(["점수원본.json", { 항목: state.scores }]);
+
+  btn.disabled = true;
+  const where = [];
+  try {
+    for (const [name, obj] of files) {
+      saved.textContent = `${name} 저장 중…`;
+      const place = await saveFile(name, obj);
+      if (place === null) { saved.textContent = "저장을 취소했습니다."; return; }
+      where.push(place);
+    }
+  } finally {
+    btn.disabled = false;
   }
-  document.getElementById("saved").textContent =
-    `저장했습니다 — 명렬 ${students.length}명, 제출자 ${state.students.filter(s => s.제출).length}명${scoreNote}`;
+
+  const scoreNote = state.scores.length ? `, 점수 ${state.scores.length}명` : "";
+  saved.textContent =
+    `저장했습니다(${where[where.length - 1]}) — 명렬 ${students.length}명, ` +
+    `제출자 ${state.students.filter(s => s.제출).length}명${scoreNote}`;
 });
 
 document.getElementById("scoresrc").addEventListener("input", parseScores);
