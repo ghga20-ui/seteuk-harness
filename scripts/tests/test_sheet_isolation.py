@@ -123,9 +123,40 @@ def _write_roster_and_mapping(tmp_path, ids):
     return roster_path, mapping_path, mapping
 
 
-def test_score_cli_multi_sheet_data_exits_without_selecting(tmp_path):
-    """점수 데이터가 있는 시트가 2개면 조용히 합치거나 고르지 않고 exit 1로 멈춘 뒤
-    시트 목록을 제시한다. 이름·학번은 출력하지 않는다."""
+def test_score_cli_auto_merges_disjoint_ids_matching_labels(tmp_path):
+    """학번이 겹치지 않고 두 시트의 점수 열 라벨이 같으면 --sheet 없이도 자동
+    병합해 진행한다(roster와 같은 논리). 반별 시트마다 매번 --sheet를 지정해
+    수동으로 결과를 합치는 부담을 없애는 것이 이 변경의 핵심이다."""
+    ids1 = [f"3010{i}" for i in range(1, 4)]
+    ids2 = [f"3020{i}" for i in range(1, 4)]
+    roster_path, mapping_path, mapping = _write_roster_and_mapping(tmp_path, ids1 + ids2)
+
+    sheet1 = [("학번", "점수")] + [(sid, "15") for sid in ids1]
+    sheet2 = [("학번", "점수")] + [(sid, "13") for sid in ids2]
+    src = _make_multi_sheet_xlsx(tmp_path, [("1반", sheet1), ("2반", sheet2)], filename="채점표.xlsx")
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(src), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+
+    assert proc.returncode == 0
+    assert out.exists()
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 6
+    scores = {item["토큰"]: item["점수"] for item in saved["items"]}
+    for sid in ids1:
+        assert scores[mapping["map"][sid]] == 15
+    for sid in ids2:
+        assert scores[mapping["map"][sid]] == 13
+    assert "2개 시트 합침" in proc.stdout
+    for sid in ids1 + ids2:
+        assert sid not in proc.stdout
+    assert "학생" not in proc.stdout
+
+
+def test_score_cli_id_overlap_stops_and_lists_sheets(tmp_path):
+    """학번이 겹치면(같은 학생에 값이 둘이라 어느 쪽이 맞는지 알 수 없음) 자동
+    병합하지 않고 exit 1로 멈춘 뒤 --sheet 지정을 요구한다. 이름·학번은 출력
+    하지 않는다."""
     ids = [f"3010{i}" for i in range(1, 4)]
     roster_path, mapping_path, mapping = _write_roster_and_mapping(tmp_path, ids)
 
@@ -138,11 +169,53 @@ def test_score_cli_multi_sheet_data_exits_without_selecting(tmp_path):
 
     assert proc.returncode == 1
     assert not out.exists()
-    assert "데이터가 있는 시트가 2개입니다" in proc.stdout
+    assert "겹쳐" in proc.stdout and "--sheet" in proc.stdout
     assert "1반" in proc.stdout and "2반" in proc.stdout
     for sid in ids:
         assert sid not in proc.stdout
     assert "학생" not in proc.stdout
+
+
+def test_score_cli_label_mismatch_stops_and_shows_both_labels(tmp_path):
+    """학번은 겹치지 않아도 시트마다 해석된 점수 열의 라벨이 다르면(같은 열
+    문자가 다른 의미를 가리키는 가장 위험한 경우) 자동 병합하지 않고 두 시트의
+    라벨을 나란히 보여준다."""
+    ids1 = [f"3010{i}" for i in range(1, 4)]
+    ids2 = [f"3020{i}" for i in range(1, 4)]
+    roster_path, mapping_path, mapping = _write_roster_and_mapping(tmp_path, ids1 + ids2)
+
+    sheet1 = [("학번", "점수")] + [(sid, "15") for sid in ids1]
+    sheet2 = [("학번", "총점")] + [(sid, "13") for sid in ids2]
+    src = _make_multi_sheet_xlsx(tmp_path, [("1반", sheet1), ("2반", sheet2)], filename="채점표.xlsx")
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(src), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "의미가 다릅니다" in proc.stdout
+    assert "점수" in proc.stdout and "총점" in proc.stdout
+    assert "1반" in proc.stdout and "2반" in proc.stdout
+    for sid in ids1 + ids2:
+        assert sid not in proc.stdout
+    assert "학생" not in proc.stdout
+
+
+def test_score_cli_single_sheet_regression(tmp_path):
+    """데이터가 있는 시트가 1개면 종전과 동일하게 자동 진행한다(회귀 없음)."""
+    ids = [f"3010{i}" for i in range(1, 4)]
+    roster_path, mapping_path, mapping = _write_roster_and_mapping(tmp_path, ids)
+
+    sheet1 = [("학번", "점수")] + [(sid, "15") for sid in ids]
+    src = _make_multi_sheet_xlsx(tmp_path, [("1반", sheet1)], filename="채점표.xlsx")
+
+    out = tmp_path / "점수.json"
+    proc = run("score", str(src), "--roster", str(roster_path), "--mapping", str(mapping_path), "--out", str(out))
+
+    assert proc.returncode == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["items"]) == 3
+    assert "시트 합침" not in proc.stdout
 
 
 def test_score_cli_sheet_option_selects_named_sheet(tmp_path):
