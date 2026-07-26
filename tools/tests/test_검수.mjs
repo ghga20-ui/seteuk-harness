@@ -2,6 +2,9 @@
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(new URL("../검수.html", import.meta.url), "utf-8");
+// 픽스처를 지어내지 말고 실제 규칙 정본에서 읽는다 — 내가 가정한 형태로
+// 테스트를 만들었다가 금지문자 검사가 무력한 것을 놓친 적이 있다.
+const RULES = JSON.parse(readFileSync(new URL("../../wiki/규칙.json", import.meta.url), "utf-8"));
 const js = html.split("<script>")[1].split("</script>")[0];
 
 // DOM 호출은 전부 무해한 껍데기로 받아넘긴다.
@@ -30,7 +33,7 @@ const ok = (cond, label, extra = "") => {
 const BUNDLE = () => ({
   활동명: "가상 활동",
   목표바이트: 700, 상한바이트: 760,
-  금지어: ["넘어", "매우"], 금지문자: ["\""],
+  금지어: RULES.금지어휘, 금지문자패턴: RULES.금지문자패턴,
   students: [
     { 토큰: "S-0001", 학번: "30101", 이름: "가상갑", 반: "1반", 톤등급: "중",
       핵심소재: "가상의 책(작가)", 세특: "가상 활동에서 성실히 참여함.", 비고: "", 예외: false,
@@ -58,8 +61,11 @@ ok(d.students[0].우선검토.length >= d.students[d.students.length - 1].우선
 
 // ── 금지어 탐지 ────────────────────────────────────────────────
 ok(mod.bannedHits("승패를 넘어선 태도").includes("넘어"), "금지어를 잡는다");
-ok(mod.bannedHits('그는 "말했다"').includes('"'), "금지문자를 잡는다");
-ok(mod.bannedHits("평범한 문장").length === 0, "깨끗하면 잡지 않는다");
+ok(mod.bannedHits('그는 "말했다"').includes('"'), "금지문자(큰따옴표)를 잡는다");
+ok(mod.bannedHits("가·나 형태").includes("·"), "금지문자(가운뎃점)를 잡는다");
+ok(mod.bannedHits("① 첫째").includes("①"), "금지문자(원문자)를 잡는다");
+ok(mod.bannedHits("평범한 문장을 적었다").length === 0, "깨끗하면 잡지 않는다",
+   JSON.stringify(mod.bannedHits("평범한 문장을 적었다")));
 
 // ── 수정 없을 때 diff가 비어야 한다 ─────────────────────────────
 mod.load(BUNDLE());

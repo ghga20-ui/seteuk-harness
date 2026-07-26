@@ -2152,8 +2152,10 @@ def build_review_bundle(drafts: dict, mapping: dict, sources: dict | None = None
     금지어 = list(rules.get("금지어휘", []))
     if rules.get("이는_경계검사", True) and "이는" not in 금지어:
         금지어 = 금지어 + ["이는"]
+    # 정규식 패턴을 문자 목록처럼 실으면 소비자가 부분일치로 검사하다 아무것도
+    # 잡지 못한다(패턴 문자열 자체가 본문에 나올 일이 없다). 패턴은 패턴으로 싣고,
+    # 소비자가 정규식으로 쓰게 한다.
     금지문자패턴 = rules.get("금지문자패턴", "")
-    금지문자 = [금지문자패턴] if 금지문자패턴 else []
 
     token_map = mapping.get("map", {})
     source_by_token = {}
@@ -2212,7 +2214,7 @@ def build_review_bundle(drafts: dict, mapping: dict, sources: dict | None = None
         "목표바이트": target,
         "상한바이트": limit,
         "금지어": 금지어,
-        "금지문자": 금지문자,
+        "금지문자패턴": 금지문자패턴,
         "students": students_out,
     }
 

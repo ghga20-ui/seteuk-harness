@@ -136,10 +136,24 @@ let onlyFlag = false;
 
 function keyOf(s) { return s.토큰 || `학번:${s.학번}`; }
 
+/**
+ * 금지 어휘와 금지 문자를 찾는다.
+ * 금지문자패턴은 정규식이다 — 문자 목록처럼 부분일치로 검사하면 패턴 문자열
+ * 자체가 본문에 나올 리 없어 아무것도 잡지 못한다(실제로 그렇게 새어 있었다).
+ */
 function bannedHits(text) {
   const hits = [];
   for (const w of (data.금지어 || [])) if (w && text.includes(w)) hits.push(w);
-  for (const c of (data.금지문자 || [])) if (c && text.includes(c)) hits.push(c);
+  const pat = data.금지문자패턴;
+  if (pat) {
+    try {
+      const found = text.match(new RegExp(pat, "gu")) || [];
+      for (const c of new Set(found)) hits.push(c);
+    } catch (err) {
+      // 패턴이 깨져 있으면 조용히 넘기지 않고 화면에 알린다
+      hits.push(`(금지문자 패턴 오류: ${err.message})`);
+    }
+  }
   return hits;
 }
 

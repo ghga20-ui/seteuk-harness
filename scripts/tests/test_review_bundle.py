@@ -256,7 +256,10 @@ def test_banned_words_and_chars_loaded_from_rules_file(tmp_path):
         assert word in saved["금지어"]
     if rules.get("이는_경계검사"):
         assert "이는" in saved["금지어"]
-    assert rules["금지문자패턴"] in saved["금지문자"]
+    assert saved["금지문자패턴"] == rules["금지문자패턴"]
+    # 패턴은 정규식이어야 한다 — 문자 목록으로 실으면 소비자 검사가 무력해진다
+    import re as _re
+    assert _re.search(saved["금지문자패턴"], '그는 "말했다" · 그리고 ①')
 
 
 # ---------------------------------------------------------------------------
