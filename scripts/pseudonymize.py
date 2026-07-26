@@ -1368,6 +1368,79 @@ def parse_sum_columns_xlsx(path, column_range, sheet=None):
     return merged_pairs, total_no, sheet_names
 
 
+def parse_score_paste(obj) -> dict:
+    """붙여넣기 입력(점수원본.json 스키마)에서 점수/등급 쌍을 추출한다.
+
+    명렬입력.html 3단계("점수 (선택)")가 만드는 형태다: 교사가 채점표에서
+    학번·점수(또는 학번·등급) 두 열을 화면에서 직접 골라 붙여넣으므로, 이
+    경로에는 애초에 "점수 열 후보가 여럿이라 모호함"이라는 상태 자체가
+    존재하지 않는다 — 실측에서 채점표 37개 중 20개(54.1%)가 점수 열 후보를
+    정확히 하나만 내놓았는데 그 하나가 틀린 활동의 열이었고, 후보가 1개면
+    _resolve_score_column의 ambiguous 분기가 아예 발동하지 않아 질문 트리거가
+    원리적으로 생기지 않았다. 파일을 파싱하는 한 이 오염은 원천적으로 잡을
+    수 없으므로, 교사가 이미 골라 놓은 값을 그대로 신뢰하는 것이 유일한 해법이다.
+
+    스키마: {"항목": [{"학번": "30101", "점수": 15}, {"학번": "30102", "등급": "중"}]}.
+    한 항목에는 "점수"(숫자) 또는 "등급"(문자열) 중 하나만 있어야 한다.
+
+    반환은 항상 "status" 키를 포함한 dict다:
+    - {"status": "error", "message": str}: 항목이 비어 있거나, 항목의 형식이
+      올바르지 않거나(학번 누락, 점수/등급 동시 존재 또는 둘 다 부재, 타입 오류),
+      파일 안에 점수 항목과 등급 항목이 섞여 있는 경우(톤 파생 규칙이 서로
+      달라 하나로 통일해야 한다)
+    - {"status": "ok", "mode": "score"|"grade", "pairs": [(학번, 값), ...]}
+    """
+    items = obj.get("항목") if isinstance(obj, dict) else None
+    if not isinstance(items, list) or not items:
+        return {"status": "error", "message": "붙여넣기 입력의 '항목'이 비어 있습니다."}
+
+    score_pairs: list = []
+    grade_pairs: list = []
+    invalid = 0
+    for it in items:
+        if not isinstance(it, dict):
+            invalid += 1
+            continue
+        sid = it.get("학번")
+        has_score = "점수" in it
+        has_grade = "등급" in it
+        if not sid or (has_score and has_grade) or not (has_score or has_grade):
+            invalid += 1
+            continue
+        if has_score:
+            v = it["점수"]
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                invalid += 1
+                continue
+            score_pairs.append((str(sid), v))
+        else:
+            v = it["등급"]
+            if not isinstance(v, str) or not v.strip():
+                invalid += 1
+                continue
+            grade_pairs.append((str(sid), v))
+
+    if invalid > 0:
+        return {
+            "status": "error",
+            "message": (
+                f"형식이 올바르지 않은 항목 {invalid}건이 있습니다 "
+                "(학번 누락, 점수·등급 동시 존재/부재, 또는 타입 오류)."
+            ),
+        }
+    if score_pairs and grade_pairs:
+        return {
+            "status": "error",
+            "message": (
+                f"점수 항목 {len(score_pairs)}건과 등급 항목 {len(grade_pairs)}건이 섞여 "
+                "있습니다. 한 가지로 통일해 주세요(점수와 등급은 톤 파생 규칙이 다릅니다)."
+            ),
+        }
+    if score_pairs:
+        return {"status": "ok", "mode": "score", "pairs": score_pairs}
+    return {"status": "ok", "mode": "grade", "pairs": grade_pairs}
+
+
 def _xlsx_is_empty(path) -> bool:
     """워크북에 실제 내용(비공백 셀)이 하나도 없는지 확인한다. 시트 중 하나라도
     내용이 있으면 비어있지 않은 것으로 판정한다."""
@@ -1709,10 +1782,32 @@ def _cmd_score(args) -> int:
     문항별 소제목이 병합된 표)에서 점수 열 후보가 여럿이면(예: 소설 비평하기
     점수, 시 비평하기 점수, 총점) 조용히 하나를 고르지 않고 exit 1로 멈춘 뒤
     선택지를 제시한다 — 오선택은 반 전체의 톤 등급을 조용히 틀리게 만든다.
+
+    --paste는 이 fail-closed 로직 자체를 우회하는 별도 입력 경로다(명렬입력.html
+    3단계 산출물인 점수원본.json). 실측에서 채점표 37개 중 20개(54.1%)가 점수
+    열 후보를 정확히 하나만 내놓았는데 그 하나가 틀린 열이었다 — 후보가 1개면
+    모호성이 감지되지 않아 질문 트리거가 원리적으로 생기지 않으므로, 교사가
+    화면에서 학번·점수 두 열을 직접 골라 붙여넣은 값을 그대로 신뢰하는 것이
+    유일한 해법이다. --paste가 주어지면 xlsx를 열지 않고, 위치 인자(input)도
+    필요 없다. --column/--grade-column/--sum-columns/--sheet와는 함께 쓸 수 없다
+    (열 해석·시트 병합은 애초에 xlsx 경로에서만 의미가 있는 개념이기 때문이다).
     """
+    if args.paste:
+        if any([args.column, args.grade_column, args.sum_columns, args.sheet]):
+            print(
+                "--paste는 --column/--grade-column/--sum-columns/--sheet와 함께 쓸 수 없습니다."
+            )
+            return 1
+        mapping = _read_json(args.mapping)
+        return _cmd_score_paste(args, mapping)
+
     given = [args.column, args.grade_column, args.sum_columns]
     if sum(1 for v in given if v) > 1:
         print("--column, --grade-column, --sum-columns 중 하나만 지정해 주세요.")
+        return 1
+
+    if not args.input:
+        print("채점표 파일 경로를 지정하거나 --paste 로 붙여넣기 입력을 사용해 주세요.")
         return 1
 
     mapping = _read_json(args.mapping)
@@ -1786,6 +1881,65 @@ def _cmd_score(args) -> int:
     print(
         f"점수 수집: {len(out_items)}명(열: {column_ref}). 분포 — {dist_str}. "
         f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+    )
+    return 0
+
+
+def _cmd_score_paste(args, mapping) -> int:
+    """--paste: 붙여넣기로 만든 점수원본.json에서 점수/등급을 그대로 받는다.
+
+    xlsx를 열지 않으므로 열 해석·시트 병합 개념이 없다 — 교사가 이미 화면에서
+    학번·점수(또는 등급) 열을 직접 골랐으므로 그 값을 그대로 신뢰한다.
+    """
+    try:
+        obj = _read_json(args.paste)
+    except (OSError, ValueError) as exc:
+        print(f"붙여넣기 입력 파일을 읽을 수 없습니다: {args.paste} ({type(exc).__name__}).")
+        return 1
+
+    result = parse_score_paste(obj)
+    if result["status"] == "error":
+        print(f"점수 붙여넣기 거부: {result['message']}")
+        return 1
+
+    mode = result["mode"]
+    pairs = result["pairs"]
+    out_items = []
+    excluded_unmapped = 0
+    for sid, value in pairs:
+        token = mapping.get("map", {}).get(str(sid))
+        if token is None:
+            excluded_unmapped += 1
+            continue
+        if mode == "score":
+            out_items.append({"토큰": token, "점수": _to_json_number(value)})
+        else:
+            out_items.append({"토큰": token, "등급": value})
+
+    _write_json({"items": out_items}, args.out)
+
+    label = "점수" if mode == "score" else "등급"
+
+    if not out_items:
+        print(f"{label} 수집: 0명(붙여넣기). 제외: 매핑 없음 {excluded_unmapped}건.")
+        return 0
+
+    dist: dict = {}
+    for item in out_items:
+        key = item.get("점수", item.get("등급"))
+        dist[key] = dist.get(key, 0) + 1
+
+    if mode == "score":
+        dist_str = ", ".join(
+            f"{_format_score_label(score)}점 {count}명"
+            for score, count in sorted(dist.items(), key=lambda kv: -kv[0])
+        )
+    else:
+        dist_str = ", ".join(f"{g} {c}명" for g, c in sorted(dist.items(), key=lambda kv: -kv[1]))
+
+    print(
+        f"{label} 수집: {len(out_items)}명(붙여넣기). 분포 — {dist_str}. "
+        f"제외: 매핑 없음 {excluded_unmapped}건."
     )
     return 0
 
@@ -1974,10 +2128,21 @@ def main(argv=None) -> int:
     p_memo.set_defaults(func=_cmd_memo)
 
     p_score = sub.add_parser("score", help="채점표 점수 토큰화(파일 입력 전용)")
-    p_score.add_argument("input", help="채점표 원본 파일(xlsx)")
+    p_score.add_argument(
+        "input", nargs="?",
+        help="채점표 원본 파일(xlsx). --paste 사용 시에는 생략한다",
+    )
     p_score.add_argument("--roster", required=True, help="명렬.json 경로")
     p_score.add_argument("--mapping", required=True, help="매핑.json 경로")
     p_score.add_argument("--out", required=True, help="점수.json 저장 경로")
+    p_score.add_argument(
+        "--paste",
+        help="붙여넣기로 만든 점수원본.json 경로(명렬입력.html 3단계 산출물). 지정하면 "
+             "xlsx를 열지 않으며 위치 인자(input)도 필요 없다. 교사가 화면에서 학번·점수 "
+             "(또는 학번·등급) 두 열을 직접 골라 붙여넣은 값을 그대로 신뢰한다 — 점수 열 "
+             "후보가 하나뿐이라 모호성이 감지되지 않는 오염(실측 54.1%%)을 원천 차단한다. "
+             "--column/--grade-column/--sum-columns/--sheet와 함께 쓸 수 없다",
+    )
     p_score.add_argument(
         "--column",
         help="점수 열(엑셀 열 문자 J/R/AA 또는 헤더 이름, 기본: 점수/총점/합계/평가점수 자동 탐지, "
