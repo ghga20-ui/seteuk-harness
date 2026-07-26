@@ -15,6 +15,7 @@ PROFILE_WITH_EVAL = {
     "활동명": "가상 활동", "문두": "가상 활동에서",
     "목표바이트": 700, "상한바이트": 760,
     "평가자료": "가상 채점표.xlsx (2026-07-17 확인)",
+    "인원": 1,
 }
 PROFILE_NO_EVAL = {k: v for k, v in PROFILE_WITH_EVAL.items() if k != "평가자료"}
 

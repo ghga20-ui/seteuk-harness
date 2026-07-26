@@ -205,7 +205,7 @@ def test_cli_success_path_saves(tmp_path):
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
         [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
-         "--roster", str(roster_path), "--save", str(out)],
+         "--roster", str(roster_path), "--save", str(out), "--expected-count", "1"],
         capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0
@@ -327,7 +327,7 @@ def test_cli_save_autofills_subject_column_and_reports_without_names(tmp_path):
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
         [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
-         "--roster", str(roster_path), "--save", str(out)],
+         "--roster", str(roster_path), "--save", str(out), "--expected-count", "1"],
         capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0
@@ -352,7 +352,7 @@ def test_cli_handles_bom_prefixed_json_inputs(tmp_path):
     script = str(Path(__file__).resolve().parents[1] / "verify_seteuk.py")
     proc = subprocess.run(
         [sys.executable, script, str(drafts_path), "--profile", str(profile_path),
-         "--roster", str(roster_path), "--save", str(out)],
+         "--roster", str(roster_path), "--save", str(out), "--expected-count", "1"],
         capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0
