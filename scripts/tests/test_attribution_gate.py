@@ -147,6 +147,8 @@ def test_submitted_missing_student_blocks_save(tmp_path):
     roster = make_roster_for(drafts)
     all_ids = [s["학번"] for s in drafts["classes"][0]["students"]]
     # 마지막 학생은 제출자 목록에서 빠뜨린다(제출 안 했는데 세특이 생성된 상황 재현).
+    # 예외 표시가 없어야 한다 — 미제출자에게 쓰는 예외 세특은 정상이므로 막지 않는다.
+    drafts["classes"][0]["students"][-1]["예외"] = False
     submitted = {"학번목록": all_ids[:-1]}
     proc, out = run_cli(tmp_path, drafts, roster=roster, submitted=submitted, expected_count=3)
     assert proc.returncode == 1
@@ -275,3 +277,36 @@ def test_tautology_regression_row_shift_caught_by_count_and_submitted_gate(tmp_p
     warn_codes = [(code, msg) for lv, code, msg in report2["경고"] if code == "SUBMITTED_NOT_DRAFTED"]
     assert len(warn_codes) == 1
     assert "1명" in warn_codes[0][1]
+
+
+def test_unsubmitted_student_with_exempt_draft_is_allowed(tmp_path):
+    """미제출자에게도 활동 참여 사실만 담은 예외 세특을 쓰는 것이 규칙이다.
+
+    제출 대조가 예외 여부를 보지 않고 FAIL을 내면, 규칙대로 쓴 초안이
+    저장되지 않는다. 미제출은 WARN으로 알리되 저장은 막지 않아야 한다.
+    """
+    drafts = make_bulk_drafts(3)
+    roster = make_roster_for(drafts)
+    all_ids = [s["학번"] for s in drafts["classes"][0]["students"]]
+    last = drafts["classes"][0]["students"][-1]
+    last["예외"] = True
+    last["세특"] = "가상 활동에 참여함."
+    last["비고"] = "미제출"
+    submitted = {"학번목록": all_ids[:-1]}
+    proc, out = run_cli(tmp_path, drafts, roster=roster, submitted=submitted, expected_count=3)
+    assert proc.returncode == 0
+    assert out.exists()
+    assert "NOT_SUBMITTED_EXEMPT" in proc.stdout
+
+
+def test_unsubmitted_student_with_full_draft_still_blocked(tmp_path):
+    """예외 표시 없이 정상 세특이 있는데 제출 기록이 없으면 여전히 막는다."""
+    drafts = make_bulk_drafts(3)
+    roster = make_roster_for(drafts)
+    all_ids = [s["학번"] for s in drafts["classes"][0]["students"]]
+    drafts["classes"][0]["students"][-1]["예외"] = False
+    submitted = {"학번목록": all_ids[:-1]}
+    proc, out = run_cli(tmp_path, drafts, roster=roster, submitted=submitted, expected_count=3)
+    assert proc.returncode == 1
+    assert not out.exists()
+    assert "NOT_SUBMITTED" in proc.stdout

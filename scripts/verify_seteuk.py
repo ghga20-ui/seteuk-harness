@@ -229,9 +229,16 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None,
                 # 않는다. 명렬 자체가 밀렸다면 여기서도 항상 일치로 보인다.
 
             if submitted is not None and sid not in submitted:
-                issues.append(("FAIL", "NOT_SUBMITTED",
-                                f"학번 {sid}: 제출자 목록에 없음 — 제출하지 않은 학생에게 "
-                                "세특이 생성된 것으로 의심됨"))
+                # 미제출자에게도 활동 참여 사실만 담은 예외 세특을 쓰는 것이 규칙이므로
+                # 예외 표시가 있으면 정상이다. 문제는 제출 기록이 없는데 정상 세특이
+                # 있는 경우다 — 근거 없는 서술이 만들어졌다는 뜻이다.
+                if exempt:
+                    issues.append(("WARN", "NOT_SUBMITTED_EXEMPT",
+                                   f"학번 {sid}: 미제출 — 예외 세특으로 처리됨"))
+                else:
+                    issues.append(("FAIL", "NOT_SUBMITTED",
+                                    f"학번 {sid}: 제출 기록이 없는데 정상 세특이 있음 — "
+                                    "근거 없는 서술 의심"))
 
             fail += sum(1 for lv, _, _ in issues if lv == "FAIL")
             warn += sum(1 for lv, _, _ in issues if lv == "WARN")
