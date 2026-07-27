@@ -583,6 +583,9 @@ const esc = s => String(s == null ? "" : s)
 
 const U8 = s => new TextEncoder().encode(s || "").length;
 /** 엑셀 =(LENB-LEN)*2+LEN 과 같은 셈(한글 2바이트). 화면은 이 기준(NEIS)만 보여준다. */
+/** 엑셀 =(LENB-LEN)*2+LEN 과 같은 셈(한글 2바이트). NEIS 기준이 아니므로 화면에
+    쓰지 않는다 — 검증기와 숫자가 어긋나 검수 중 분량을 잘못 조절하게 된다.
+    엑셀 검수용 파일과 대조할 때를 위해 함수만 남긴다. */
 const B2 = s => [...(s || "")].reduce((n, c) => n + (c.codePointAt(0) > 127 ? 2 : 1), 0);
 
 /** 붙여넣은 텍스트를 표로 쪼갠다. 탭 → 여러 칸 → 쉼표 순으로 시도한다. */
@@ -1246,7 +1249,7 @@ const REVIEW = (() => {
 
   function rowHtml(s, idx) {
     const reason = (s.우선검토 && s.우선검토[0]) || "";
-    const byte = B2(s.세특);
+    const byte = U8(s.세특);
     const cls = ["row"];
     if (s.검수완료) cls.push("done");
     return `<li class="${cls.join(" ")}" data-i="${idx}" tabindex="-1" role="button"
@@ -1263,7 +1266,7 @@ const REVIEW = (() => {
   }
 
   function detailHtml(s, idx) {
-    const u = B2(s.세특);
+    const u = U8(s.세특);
     const over = data.상한바이트 && u > data.상한바이트;
     const hits = bannedHits(s.세특);
     const changed = original.get(keyOf(s))?.세특 !== s.세특;
@@ -1383,7 +1386,7 @@ const REVIEW = (() => {
     const metaEl = li.querySelector(".review-meta");
     if (!metaEl) return;
     const s = data.students[i];
-    const u = B2(s.세특);
+    const u = U8(s.세특);
     const over = data.상한바이트 && u > data.상한바이트;
     const hits = bannedHits(s.세특);
     const changed = original.get(keyOf(s))?.세특 !== s.세특;
