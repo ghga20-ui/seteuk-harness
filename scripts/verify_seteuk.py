@@ -145,15 +145,23 @@ def load_submitted_ids(path) -> set[str]:
             else:
                 add(item)
     elif isinstance(data, dict):
-        for v in data.get("학번목록", []):
-            add(v)
-        for sid in data.get("map", {}):
-            add(sid)
-        for s in data.get("students", []):
-            add(s.get("학번"))
-        for cls in data.get("classes", []):
-            for s in cls.get("students", []):
+        # 여러 모양이 한 파일에 같이 있으면 합집합을 만들지 않고 가장 구체적인
+        # 것 하나만 쓴다. 명렬(students)과 제출자(학번목록)가 함께 든 파일에서
+        # 합집합을 만들면 명렬 전원이 제출자가 되어 미제출자 귀속 게이트가
+        # 조용히 죽는다 — 게이트가 살아 있는 것처럼 보이면서 아무것도 막지 않는다.
+        if data.get("학번목록"):
+            for v in data["학번목록"]:
+                add(v)
+        elif data.get("map"):
+            for sid in data["map"]:
+                add(sid)
+        elif data.get("students"):
+            for s in data["students"]:
                 add(s.get("학번"))
+        elif data.get("classes"):
+            for cls in data["classes"]:
+                for s in cls.get("students", []):
+                    add(s.get("학번"))
     return ids
 
 

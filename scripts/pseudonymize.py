@@ -1454,7 +1454,7 @@ MAPPING_GLOB = "매핑*.json"
 # 원장)도 매핑표와 마찬가지로 무기한 평문으로 남으면 안 되므로 파기·잔존
 # 감지 대상에 포함한다.
 SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수*.json",
-                   "토큰본*.json", "제출자*.json", "검수번들*.json")
+                   "토큰본*.json", "제출자*.json", "검수번들*.json", "검수본*.json")
 
 
 def save_mapping(mapping: dict, path) -> None:

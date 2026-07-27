@@ -310,3 +310,27 @@ def test_unsubmitted_student_with_full_draft_still_blocked(tmp_path):
     assert proc.returncode == 1
     assert not out.exists()
     assert "NOT_SUBMITTED" in proc.stdout
+
+
+def test_merged_file_does_not_union_roster_into_submitted(tmp_path):
+    """한 파일에 명렬과 제출자가 같이 있어도 합집합을 만들지 않는다.
+
+    합집합이 되면 명렬 전원이 제출자가 되어 미제출자 게이트가 조용히 죽는다 —
+    게이트는 살아 있는 것처럼 보이면서 아무것도 막지 않는다.
+    """
+    import verify_seteuk as V
+    p = tmp_path / "merged.json"
+    p.write_text(json.dumps({
+        "students": [{"학번": "30101"}, {"학번": "30102"}, {"학번": "30103"}],
+        "학번목록": ["30101", "30102"],
+    }, ensure_ascii=False), encoding="utf-8")
+    assert V.load_submitted_ids(p) == {"30101", "30102"}
+
+
+def test_roster_shape_alone_still_works(tmp_path):
+    """제출자 목록이 없으면 종전대로 명렬 모양에서 학번을 읽는다(회귀)."""
+    import verify_seteuk as V
+    p = tmp_path / "roster.json"
+    p.write_text(json.dumps({"students": [{"학번": "30101"}, {"학번": "30102"}]},
+                            ensure_ascii=False), encoding="utf-8")
+    assert V.load_submitted_ids(p) == {"30101", "30102"}
