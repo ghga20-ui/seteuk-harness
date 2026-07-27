@@ -576,7 +576,9 @@
 "use strict";
 /* ═════════════════════════ 공통 ═════════════════════════ */
 const norm = s => (s || "").replace(/\s+/g, "");
-const isDigits = s => /^\d+$/.test(norm(s));
+/** 학번 후보에서 셀 서식을 떼어 낸다 — 엑셀은 30101을 "30,101"로 보낸다. */
+const normId = s => (s || "").replace(/[\s,]/g, "");
+const isDigits = s => /^\d+$/.test(normId(s));
 const hasKorean = s => /[가-힣]/.test(s || "");
 const esc = s => String(s == null ? "" : s)
   .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -588,12 +590,45 @@ const U8 = s => new TextEncoder().encode(s || "").length;
     엑셀 검수용 파일과 대조할 때를 위해 함수만 남긴다. */
 const B2 = s => [...(s || "")].reduce((n, c) => n + (c.codePointAt(0) > 127 ? 2 : 1), 0);
 
-/** 붙여넣은 텍스트를 표로 쪼갠다. 탭 → 여러 칸 → 쉼표 순으로 시도한다. */
+/**
+ * 붙여넣은 텍스트를 표로 쪼갠다.
+ *
+ * 탭이 있으면 엑셀이 넣은 것으로 보고 인용 규칙까지 지켜 읽는다 — 셀 안에
+ * 줄바꿈(Alt+Enter)이나 탭이 있으면 엑셀은 그 셀을 따옴표로 감싸 보낸다.
+ * 줄 단위로 자르면 한 사람이 두 행이 되고 그 뒤 사람이 전부 밀린다.
+ * 탭이 없으면 종전대로 여러 칸 → 쉼표 → 공백 순으로 나눈다.
+ */
 function splitRows(text) {
-  const lines = (text || "").split(/\r?\n/).filter(l => l.trim() !== "");
-  if (!lines.length) return [];
-  const pick = lines.some(l => l.includes("\t")) ? /\t/
-             : lines.some(l => /\s{2,}/.test(l)) ? /\s{2,}/
+  const t = (text || "").replace(/\r\n?/g, "\n");
+  if (!t.trim()) return [];
+
+  if (t.includes("\t")) {
+    const rows = [];
+    let row = [], cell = "", quoted = false, seen = false;
+    const endCell = () => { row.push(cell.trim()); cell = ""; seen = true; };
+    const endRow = () => {
+      endCell();
+      if (row.some(c => c !== "")) rows.push(row);
+      row = []; seen = false;
+    };
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (quoted) {
+        if (c === '"') {
+          if (t[i + 1] === '"') { cell += '"'; i++; }   // "" 는 따옴표 한 개
+          else quoted = false;
+        } else cell += c;
+      } else if (c === '"' && cell === "") quoted = true;
+      else if (c === "\t") endCell();
+      else if (c === "\n") endRow();
+      else cell += c;
+    }
+    if (cell !== "" || seen || row.length) endRow();
+    return rows;
+  }
+
+  const lines = t.split("\n").filter(l => l.trim() !== "");
+  const pick = lines.some(l => /\s{2,}/.test(l)) ? /\s{2,}/
              : lines.some(l => l.includes(",")) ? /\s*,\s*/
              : /\s+/;
   return lines.map(l => l.split(pick).map(c => c.trim()));
@@ -695,7 +730,7 @@ const ROSTER = (() => {
   }
 
   function isHeaderLikeRow(r, cols) {
-    const idVal = norm(r[cols.id] || "");
+    const idVal = normId(r[cols.id] || "");
     const nameVal = norm(r[cols.name] || "");
     return HEADER_ID.includes(idVal) && HEADER_NAME.includes(nameVal);
   }
@@ -718,7 +753,7 @@ const ROSTER = (() => {
     let list = [];
     let blank = 0, blankRows = [];
     for (const { r, rowNum } of body) {
-      const sid = norm(r[cols.id] || "");
+      const sid = normId(r[cols.id] || "");
       const name = (r[cols.name] || "").trim();
       if (!sid && !name) continue;
       if (!sid || !name) { blank++; blankRows.push(rowNum); continue; }
@@ -1016,7 +1051,7 @@ const ROSTER = (() => {
 
     let idCol = -1, best = 0;
     for (let c = 0; c < width; c++) {
-      const hit = rows.filter(r => known.has(norm(r[c] || ""))).length;
+      const hit = rows.filter(r => known.has(normId(r[c] || ""))).length;
       if (hit > best) { best = hit; idCol = c; }
     }
     if (idCol < 0) {
@@ -1047,7 +1082,7 @@ const ROSTER = (() => {
     let unknown = 0, blank = 0, numeric = 0, graded = 0;
     const seen = new Set();
     rows.forEach(r => {
-      const sid = norm(r[idCol] || "");
+      const sid = normId(r[idCol] || "");
       const raw = (r[valCol] || "").trim();
       if (!sid) return;
       if (!known.has(sid)) { unknown++; return; }
