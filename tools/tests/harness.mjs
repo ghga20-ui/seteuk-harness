@@ -14,10 +14,12 @@ export function loadTools() {
   const els = new Map();
   const make = () => ({
     innerHTML: "", textContent: "", value: "", disabled: false, hidden: false,
-    files: [], dataset: {},
-    addEventListener() {}, setAttribute() {}, click() {},
-    closest: () => ({ classList: { toggle() {} } }),
-    classList: { toggle() {}, contains: () => false },
+    files: [], dataset: {}, style: {},
+    addEventListener() {}, removeEventListener() {}, setAttribute() {}, removeAttribute() {},
+    click() {}, focus() {}, appendChild() {}, remove() {},
+    querySelector: () => null, querySelectorAll: () => [],
+    closest: () => ({ classList: { toggle() {}, add() {}, remove() {}, contains: () => false } }),
+    classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
   });
   const document = {
     getElementById(id) {
@@ -25,6 +27,8 @@ export function loadTools() {
       return els.get(id);
     },
     createElement: make,
+    querySelector: () => null,
+    querySelectorAll: () => [],
     addEventListener() {},
   };
   const window = { addEventListener() {} };

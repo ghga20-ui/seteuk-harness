@@ -5,213 +5,576 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>세특 작업 도구 — seteuk-harness</title>
 <style>
+  /* ══════════════════ 디자인 토큰 (설계브리프 §3, hex 값 그대로) ══════════════════ */
   :root {
-    --bg: #fbfbfa; --fg: #1a1a18; --muted: #6b6b64; --line: #e2e2dd;
-    --card: #fff; --accent: #2f6f4e; --warn: #9a6b00; --bad: #a33a2a;
-    --warnbg: #fdf6e3; --badbg: #fdeeeb; --okbg: #eef5f0; --src: #f4f4f1;
+    --surface: #fdfdfe;
+    --surface-sunken: #eef2f3;
+    --panel: #f2f5f6;
+    --ink: #1a1f21;
+    --ink-2: #4c5356;
+    --ink-3: #5d6468;
+    --rule: #dde0e2;
+    --rule-strong: #81878a;
+    --rule-double: #6c7275;
+    --accent: #1f6543;
+    --accent-ink: #fdfdfe;
+    --accent-quiet: #ddf3e5;
+    --focus: #1b4fd0;
+    --flag: #8b5214;
+    --stop: #a72a2a;
+    --stop-ground: #ffeeec;
+
+    --font: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "D2Coding", Consolas, ui-monospace, monospace;
+
+    --t-title: 1.5rem;
+    --t-section: 1.1875rem;
+    --t-body: 1.0625rem;
+    --t-ui: 0.9375rem;
+    --t-meta: 0.8125rem;
+
+    --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+    --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+
+    --measure: 34rem;
+    --col: 880px;
+    --col-wide: 1032px;
   }
+
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #16171a; --fg: #e8e8e4; --muted: #9a9a92; --line: #2e3034;
-      --card: #1e1f23; --accent: #7fb99a; --warn: #d8b25e; --bad: #e08b7a;
-      --warnbg: #2a2418; --badbg: #2b1c19; --okbg: #1b241f; --src: #191a1e;
+      --surface: #111517;
+      --surface-sunken: #06090a;
+      --panel: #191d20;
+      --ink: #e5e8ea;
+      --ink-2: #aaafb2;
+      --ink-3: #949a9d;
+      --rule: #2b3032;
+      --rule-strong: #6a7175;
+      --rule-double: #98a0a3;
+      --accent: #72c496;
+      --accent-ink: #06170d;
+      --accent-quiet: #13281c;
+      --focus: #8fb4ff;
+      --flag: #ebb878;
+      --stop: #f28881;
+      --stop-ground: #391b18;
     }
   }
+
+  /* ══════════════════ 기초 ══════════════════ */
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
   body {
-    margin: 0; padding: 0 0 4rem; background: var(--bg); color: var(--fg);
-    font: 16px/1.65 "Malgun Gothic", "맑은 고딕", -apple-system, system-ui, sans-serif;
+    margin: 0; background: var(--surface); color: var(--ink);
+    font-family: var(--font);
+    font-size: var(--t-body); line-height: 1.75;
+    letter-spacing: 0;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    font-variant-numeric: tabular-nums;
   }
-  main { max-width: 1180px; margin: 0 auto; padding: 1.5rem 1.25rem; }
-  h1 { font-size: 1.3rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
-  .sub { color: var(--muted); font-size: .88rem; margin: 0 0 1.5rem; }
+  h1, h2, h3 { font-family: var(--font); font-weight: 600; margin: 0; color: var(--ink); }
+  p { margin: 0; }
+  code { font-family: var(--font-mono); font-size: 0.92em; background: var(--surface-sunken); padding: 0.05em 0.4em; }
 
-  /* 탭 */
-  .tabs {
-    position: sticky; top: 0; z-index: 20; background: var(--bg);
-    border-bottom: 1px solid var(--line); display: flex; gap: .25rem;
-    padding: 0 1.25rem; max-width: 1180px; margin: 0 auto;
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
   }
-  .tabs button {
-    border: none; background: none; color: var(--muted); cursor: pointer;
-    font: inherit; font-size: .93rem; padding: .8rem .9rem;
-    border-bottom: 2px solid transparent; border-radius: 0;
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: inherit;
   }
-  .tabs button[aria-selected="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
-  section[hidden] { display: none; }
+  :focus:not(:focus-visible) { outline: none; }
 
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 1.15rem; margin-bottom: 1rem;
+  /* ══════════════════ 상단 줄 ══════════════════ */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    height: 44px; display: flex; align-items: center; justify-content: space-between;
+    gap: var(--s4);
+    padding: 0 var(--s5);
+    background: var(--surface);
+    border-bottom: 1px solid var(--rule);
   }
-  .card.done { opacity: .55; }
-  .card.flag { border-color: var(--warn); }
-  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em;
-       color: var(--muted); margin: 0 0 .8rem; font-weight: 600; }
-  h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
-       color: var(--muted); margin: 0 0 .4rem; font-weight: 600; }
-
-  textarea {
-    width: 100%; min-height: 180px; padding: .72rem; border: 1px solid var(--line);
-    border-radius: 7px; background: var(--bg); color: var(--fg); resize: vertical;
-    font: 13px/1.5 Consolas, "D2Coding", monospace;
+  .topbar h1 { font-size: var(--t-title); line-height: 1.35; }
+  .topbar output {
+    font-size: var(--t-ui); line-height: 1.5; color: var(--ink-2);
+    white-space: nowrap;
   }
-  textarea.prose { font: 15px/1.7 inherit; }
-  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-  .hint { color: var(--muted); font-size: .85rem; margin: .6rem 0 0; }
-  .stats { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .85rem; }
-  .chip { padding: .3rem .7rem; border-radius: 999px; font-size: .85rem;
-          background: var(--okbg); border: 1px solid var(--line); }
-  .chip.warn { background: var(--warnbg); color: var(--warn); border-color: transparent; }
-  .chip.bad  { background: var(--badbg); color: var(--bad); border-color: transparent; }
-  .tag { font-size: .76rem; padding: .15rem .5rem; border-radius: 999px;
-         background: var(--okbg); border: 1px solid var(--line); color: var(--muted); }
-  .tag.flag { background: var(--warnbg); color: var(--warn); border-color: transparent; }
-  .tag.ex   { background: var(--badbg); color: var(--bad); border-color: transparent; }
-  .notice { padding: .7rem .85rem; border-radius: 7px; font-size: .9rem; margin-bottom: .6rem; }
-  .notice.warn { background: var(--warnbg); color: var(--warn); }
-  .notice.bad  { background: var(--badbg); color: var(--bad); }
+  /* ══════════════════ 골격 ══════════════════ */
+  .shell { display: flex; align-items: flex-start; }
 
-  .tablewrap { overflow-x: auto; max-height: 420px; overflow-y: auto;
-               border: 1px solid var(--line); border-radius: 7px; }
-  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-  th, td { padding: .4rem .7rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { position: sticky; top: 0; background: var(--card); font-weight: 600; font-size: .8rem; color: var(--muted); }
-  tr:last-child td { border-bottom: none; }
-  tr.dup td { background: var(--badbg); }
-  tr.absent td:not(:last-child) { opacity: .45; text-decoration: line-through; }
-  td.check { text-align: center; }
-  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
-
-  .actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: 1rem; }
-  button {
-    font: inherit; font-size: .9rem; padding: .52rem 1.05rem; border-radius: 7px;
-    border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer;
+  nav.toc {
+    display: none;
+    flex: 0 0 200px;
+    width: 200px;
+    align-self: flex-start;
+    position: sticky;
+    top: 44px;                 /* 상단 줄 아래에 붙는다 */
+    max-height: calc(100vh - 44px);
+    overflow-y: auto;
+    background: var(--panel);
+    padding: var(--s6) var(--s5);
   }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  button:disabled { opacity: .4; cursor: not-allowed; }
-  input[type=file] { font-size: .87rem; }
+  @media (min-width: 1120px) {
+    nav.toc { display: block; }
+  }
+  nav.toc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+  nav.toc a {
+    display: inline-block;
+    font-size: var(--t-ui); color: var(--ink-2); text-decoration: none;
+  }
+  nav.toc a:hover { color: var(--ink); }
+  nav.toc a[aria-current="true"] { color: var(--ink); font-weight: 600; }
+  nav.toc li.toc-note { font-size: var(--t-ui); color: var(--ink-3); line-height: 1.5; }
 
-  /* 검수 */
-  .bar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: 1.2rem; }
-  .bar .grow { flex: 1 1 auto; }
-  .prog { font-size: .87rem; color: var(--muted); }
-  .prog b { color: var(--fg); }
-  .split { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; }
-  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
-  .source { background: var(--src); border: 1px solid var(--line); border-radius: 7px;
-            padding: .7rem; max-height: 260px; overflow-y: auto;
-            font-size: .87rem; white-space: pre-wrap; word-break: break-word; }
-  .who { font-weight: 600; }
-  .head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; margin-bottom: .7rem; }
-  .meta { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
-          margin-top: .5rem; font-size: .85rem; color: var(--muted); }
-  .meta .over { color: var(--bad); font-weight: 600; }
-  .hits { color: var(--bad); }
-  .memo { width: 100%; margin-top: .5rem; padding: .45rem .6rem; font: inherit; font-size: .87rem;
-          border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: var(--fg); }
-  .foot { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; margin-top: .7rem; }
-  label.chk { display: flex; gap: .4rem; align-items: center; font-size: .88rem; cursor: pointer; }
+  details.toc-details {
+    margin: var(--s5) var(--s5) 0;
+  }
+  @media (min-width: 1120px) {
+    details.toc-details { display: none; }
+  }
+  details.toc-details summary { font-size: var(--t-ui); color: var(--ink-2); cursor: pointer; }
+  details.toc-details ul { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+  details.toc-details a { font-size: var(--t-ui); color: var(--ink-2); text-decoration: none; }
+  details.toc-details li.toc-note { font-size: var(--t-ui); color: var(--ink-3); }
 
-  .privacy { font-size: .85rem; color: var(--muted); border-top: 1px solid var(--line);
-             padding-top: 1rem; margin-top: 2rem; }
-  code { background: var(--src); padding: .1rem .35rem; border-radius: 4px; font-size: .88em; }
+  main.col {
+    flex: 1 1 auto;
+    max-width: var(--col-wide);
+    margin: 0 auto;
+    padding: var(--s6) var(--s5) var(--s8);
+  }
+  /* 기본 기둥은 880px. 검수만 1032px로 푼다 — 이 도구에서 가장 오래 보는 화면이라
+     두 칸이 각 424px(약 25자)로 좁아지는 값을 치르지 않는다. */
+  main.col > .sec, main.col > hr, main.col > section { max-width: var(--col); }
+  main.col .sec.sec-wide { max-width: none; }
+  @media (min-width: 1120px) {
+    main.col { margin: 0; }
+  }
+
+  .sec { padding: var(--s6) 0; }
+  .sec > * + * { margin-top: var(--s5); }
+  main.col > #sec-review, main.col > #sec-review-save { max-width: var(--col-wide); }
+
+  hr.rule { border: 0; border-top: 1px solid var(--rule); margin: 0; }
+  hr.rule-double {
+    border: 0; border-top: 2px solid var(--rule-double);
+    margin: 0;
+  }
+  section.bridge { padding: var(--s6) 0; text-align: center; }
+  section.bridge h2 { font-size: var(--t-section); line-height: 1.45; margin: var(--s5) 0; }
+  section.bridge p { max-width: var(--measure); margin: var(--s5) auto 0; color: var(--ink-2); }
+
+  h2 { font-size: var(--t-section); line-height: 1.45; }
+  h3 { font-size: var(--t-ui); line-height: 1.5; font-weight: 600; }
+
+  .measure { max-width: var(--measure); color: var(--ink-2); font-size: var(--t-body); line-height: 1.75; }
+  .measure.hint { color: var(--ink-2); }
+  .measure.limits { color: var(--ink-2); }
+
+  /* ══════════════════ 입력 ══════════════════ */
+  label { font-size: var(--t-ui); }
+  input[type=text], textarea {
+    font-family: var(--font); font-size: var(--t-body); color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--rule-strong);
+    padding: var(--s2) var(--s3);
+    width: 100%;
+  }
+  input[type=text]:hover, textarea:hover { border-color: var(--ink-3); }
+  input[type=text]:focus-visible, textarea:focus-visible { border-color: var(--ink-3); }
+  input[type=text].error, textarea.error { border-color: var(--stop); }
+
+  #count-input { width: 8rem; display: inline-block; }
+  .field { display: flex; align-items: center; gap: var(--s2); }
+
+  textarea { min-height: 8rem; resize: vertical; line-height: 1.75; font-variant-numeric: tabular-nums; }
+  textarea#src, textarea#scoresrc { font-family: var(--font); }
+
+  /* 세특 입력 — 밑줄, 상자 아님 (A15) */
+  textarea.underline {
+    border: 0; border-bottom: 1px solid var(--rule-strong);
+    background: var(--surface);
+    padding: var(--s3) var(--s2);
+    line-height: 1.75;
+  }
+
+  fieldset { border: 0; padding: 0; margin: 0; }
+  legend { font-size: var(--t-body); font-weight: 600; padding: 0; margin: 0 0 var(--s3); }
+
+  .kv { display: flex; flex-direction: column; gap: var(--s2); margin: 0; }
+  .kv > div { display: flex; gap: var(--s3); }
+  .kv dt { font-size: var(--t-ui); color: var(--ink-2); width: 3rem; margin: 0; }
+  .kv dd { font-size: var(--t-body); font-weight: 600; margin: 0; font-variant-numeric: tabular-nums; }
+
+  /* ══════════════════ 단추 ══════════════════ */
+  .btn {
+    font-family: var(--font); font-size: var(--t-ui);
+    padding: var(--s2) var(--s4);
+    border: 1px solid var(--rule-strong);
+    background: var(--surface); color: var(--ink);
+    cursor: pointer;
+    display: inline-block;
+  }
+  .btn:hover { background: var(--surface-sunken); }
+  .btn:active { background: var(--accent-quiet); }
+  .btn:disabled {
+    color: var(--ink-3); border-color: var(--rule); cursor: default; background: var(--surface);
+  }
+  .btn.primary {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+    font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(0.94); }
+  @media (prefers-color-scheme: dark) {
+    .btn.primary:hover { filter: brightness(1.08); }
+  }
+  .btn.primary:active { filter: none; background: var(--accent); }
+
+  .btnrow { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; }
+
+  /* ══════════════════ 라디오 ══════════════════ */
+  .radiorow { display: flex; flex-wrap: wrap; gap: var(--s2); }
+  .radiorow label {
+    display: inline-flex; align-items: center; gap: var(--s1);
+    padding: var(--s1) var(--s2);
+    cursor: pointer;
+  }
+  .radiorow label:hover { background: var(--surface-sunken); }
+  input[type=radio] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  /* ══════════════════ 표 ══════════════════ */
+  /* 48명이면 표만 3,000px가 넘어 점수·저장이 저 아래로 밀려난다. 표는 이름 몇 개를
+     눈으로 확인하는 자리이지 통독하는 자리가 아니므로 스크롤 상자에 담는다. */
+  .tablewrap { overflow: auto; max-height: 26rem; border-bottom: 1px solid var(--rule); }
+  .tablewrap thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+  table { border-collapse: collapse; width: 100%; font-size: var(--t-ui); }
+  th, td { padding: var(--s2) var(--s3); text-align: left; border-bottom: 1px solid var(--rule); }
+  th { color: var(--ink-2); font-weight: 600; font-size: var(--t-meta); }
+  td { font-variant-numeric: tabular-nums; }
+  td.dupword { color: var(--stop); }
+
+  /* ══════════════════ 확인 구역 ══════════════════ */
+  .t-body.strong { font-size: var(--t-body); font-weight: 600; }
+  .stopline {
+    display: block;
+    background: var(--stop-ground);
+    border-left: 2px solid var(--stop);
+    padding: var(--s3) var(--s4);
+    color: var(--ink);
+    animation: fadein-stop 240ms ease-out;
+  }
+  @keyframes fadein-stop { from { opacity: 0; } to { opacity: 1; } }
+
+  #errata-list p { margin: 0; }
+  #errata-list p.cause { color: var(--ink-2); margin-top: var(--s1); }
+  #errata-list > * + * { margin-top: var(--s2); }
+  #errata-list .errata-item { padding: var(--s3) 0; border-bottom: 1px solid var(--rule); }
+  #errata-list .errata-item:last-child { border-bottom: 0; }
+
+  #sec-check { animation: fadein-block 180ms ease-out; }
+  @keyframes fadein-block {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ══════════════════ 역할 상자 (전 페이지 유일한 테두리 블록 2개) ══════════════════ */
+  .rolebox-row { display: flex; flex-wrap: wrap; gap: var(--s5); align-items: stretch; }
+  .rolebox {
+    flex: 1 1 320px;
+    background: var(--surface);
+    padding: var(--s4);
+  }
+  .rolebox-local { border: 1px solid var(--rule-strong); }
+  /* 실명이 든 쪽임을 색이 아니라 제목 낱말과 아래 문구로 말한다 —
+     --stop은 불일치 한 곳에만 남겨 둔다(§3.6 채운 경고면은 한 곳뿐). */
+  .rolebox-local h3::after {
+    content: " · 실명 있음"; color: var(--stop); font-weight: 600;
+  }
+  .rolebox-local.empty h3::after { content: ""; }
+  .rolebox-ai { border: 1px solid var(--rule-strong); }
+  .rolebox h3 { font-size: var(--t-ui); font-weight: 600; margin-bottom: var(--s3); }
+  .rolebox .filename { font-family: var(--font-mono); font-size: var(--t-ui); }
+  .rolebox .meta { font-size: var(--t-meta); color: var(--ink-2); margin-top: var(--s1); }
+  .rolebox p { font-size: var(--t-meta); color: var(--ink-2); }
+  .rolebox p + p { margin-top: var(--s2); }
+
+  /* ══════════════════ 검수 ══════════════════ */
+  #h-review output { font-size: var(--t-section); font-weight: 600; margin-left: var(--s2); }
+  .review-group-title { font-size: var(--t-section); font-weight: 600; margin-top: var(--s6); }
+  ul.review-list { list-style: none; margin: var(--s3) 0 0; padding: 0; }
+  ul.review-list li.row {
+    border-bottom: 1px solid var(--rule);
+    padding: var(--s3) var(--s2);
+    cursor: pointer;
+  }
+  ul.review-list li.row:hover { background: var(--surface-sunken); }
+  ul.review-list li.row:active { background: var(--accent-quiet); }
+  ul.review-list li.row[aria-expanded="true"] { background: var(--accent-quiet); }
+  ul.review-list li.row.done { color: var(--ink-3); }
+  ul.review-list li.row.done .who { color: var(--ink-3); }
+  .row-line1 { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: baseline; }
+  .row-line1 .reason { color: var(--flag); font-size: var(--t-ui); }
+  .row-line1 .who { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .row-line1 .bytes { margin-left: auto; color: var(--ink-3); font-size: var(--t-meta); font-variant-numeric: tabular-nums; }
+  .row-line1 .donemark { color: var(--ink-3); }
+  .row-line2 { color: var(--ink-2); font-size: var(--t-meta); margin-top: var(--s1); }
+  li.row[aria-expanded="true"] .row-line1 .who { font-weight: 600; }
+
+  .review-detail { padding: var(--s4) var(--s2) var(--s5); }
+  .review-detail .detail-head { font-size: var(--t-ui); color: var(--ink-2); margin-bottom: var(--s4); }
+  .review-panes { display: flex; flex-direction: column; gap: var(--s4); }
+  @media (min-width: 700px) {
+    .review-panes { flex-direction: row; }
+  }
+  .review-pane { flex: 1 1 0; min-width: 0; }
+  .review-pane h4 { font-size: var(--t-meta); color: var(--ink-2); font-weight: 600; margin: 0 0 var(--s2); }
+  /* 두 칸의 첫 줄이 같은 자리에서 시작해야 학생이 바뀌어도 눈이 헤매지 않는다.
+     제목 높이를 맞추고 본문 상자를 같은 여백·행간으로 둔다. */
+  .review-pane { display: flex; flex-direction: column; min-width: 0; }
+  .review-pane > h4 {
+    font-size: var(--t-ui); font-weight: 600; line-height: 1.5;
+    margin: 0 0 var(--s2);
+  }
+  .source-body {
+    background: var(--surface-sunken);
+    padding: var(--s3);
+    min-height: 14rem;
+    flex: 1 1 auto;
+    font-size: var(--t-body); line-height: 1.75;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+  }
+  .pane-edit textarea {
+    /* 두 칸의 높이를 같이 간다 — 학생이 바뀌어도 아래 요소가 위아래로 튀지 않는다. */
+    min-height: 14rem;
+    flex: 1 1 auto;
+    padding: var(--s3);
+    line-height: 1.75;
+    font-size: var(--t-body);
+    resize: vertical;
+  }
+  .review-meta { margin-top: var(--s3); font-size: var(--t-meta); color: var(--ink-3); }
+  .review-meta .over { color: var(--stop); }
+  .review-meta .hits { color: var(--stop); }
+  .review-memo { margin-top: var(--s4); }
+  .review-memo label { display: block; font-size: var(--t-meta); color: var(--ink-2); margin-bottom: var(--s1); }
+  .review-memo input {
+    width: 100%; font-family: var(--font); font-size: var(--t-ui);
+    border: 0; border-bottom: 1px solid var(--rule-strong); background: transparent; color: var(--ink);
+    padding: var(--s1) 0;
+  }
+  .review-detail .btnrow { margin-top: var(--s4); }
+
+  #review-drop { margin-top: var(--s4); }
+  #review-drop input[type=file] { display: none; }
+
+  /* ══════════════════ 접근성 · 모션 ══════════════════ */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      transition-duration: .01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 </style>
 </head>
 <body>
 
-<nav class="tabs">
-  <button id="tab-a" aria-selected="true">명단과 점수</button>
-  <button id="tab-b" aria-selected="false">검수</button>
-</nav>
+<header class="topbar">
+  <h1>세특 작업 도구</h1>
+  <output id="status" aria-live="polite">이 화면에서 저장한 것 없음</output>
+</header>
 
-<main>
-<!-- ═══════════════════ 탭 A · 명단과 점수 ═══════════════════ -->
-<section id="pane-a">
-  <h1>명단과 점수</h1>
-  <p class="sub">엑셀에서 학번·이름 두 열을 <strong>함께</strong> 선택해 붙여넣으세요. 따로 붙여넣으면 행이 어긋납니다.</p>
+<div class="shell">
+  <nav class="toc" aria-label="차례">
+    <ul>
+      <li><a href="#sec-count" data-toc="sec-count">인원</a></li>
+      <li><a href="#sec-roster" data-toc="sec-roster">명단</a></li>
+      <li><a href="#sec-score" data-toc="sec-score">점수</a></li>
+      <li><a href="#sec-save" data-toc="sec-save">저장</a></li>
+      <li class="toc-note">세특 ―<br>대화에서 만듭니다</li>
+      <li><a href="#sec-review" data-toc="sec-review">검수</a></li>
+      <li><a href="#sec-review-save" data-toc="sec-review-save">검수 저장</a></li>
+      <li><a href="#sec-cleanup" data-toc="sec-cleanup">정리</a></li>
+    </ul>
+  </nav>
 
-  <div class="card">
-    <h2>1 · 붙여넣기</h2>
-    <textarea id="src" spellcheck="false" placeholder="30101&#9;김OO&#10;30102&#9;이OO&#10;30103&#9;박OO"></textarea>
-    <p class="hint">헤더 줄(학번·이름)이 있어도 되고 없어도 됩니다. 열 순서도 알아서 판별합니다.</p>
-  </div>
+  <main class="col">
 
-  <div class="card" id="result" hidden>
-    <h2>2 · 확인</h2>
-    <div id="notices"></div>
-    <div class="stats" id="stats"></div>
-    <p class="hint" id="colnote"></p>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th style="width:3.5rem">순번</th><th>학번</th><th>이름</th><th style="width:5rem">제출</th></tr></thead>
-        <tbody id="tbody"></tbody>
-      </table>
-    </div>
-    <div class="actions">
-      <button id="allon">전원 제출로</button>
-      <button id="alloff">전원 미제출로</button>
-      <span class="hint" id="submitnote"></span>
-    </div>
-  </div>
+    <details class="toc-details">
+      <summary>차례</summary>
+      <ul>
+        <li><a href="#sec-count">인원</a></li>
+        <li><a href="#sec-roster">명단</a></li>
+        <li><a href="#sec-score">점수</a></li>
+        <li><a href="#sec-save">저장</a></li>
+        <li class="toc-note">세특 ―<br>대화에서 만듭니다</li>
+        <li><a href="#sec-review">검수</a></li>
+        <li><a href="#sec-review-save">검수 저장</a></li>
+        <li><a href="#sec-cleanup">정리</a></li>
+      </ul>
+    </details>
 
-  <div class="card" id="scorecard" hidden>
-    <h2>3 · 점수 (선택)</h2>
-    <p class="hint" style="margin-top:0">
-      채점표에서 <strong>학번과 점수 두 열을 함께</strong> 긁어 붙여넣으세요.
-      비워 두면 점수 없이 진행합니다(등급만 있으면 등급을 그대로 적어도 됩니다).
-    </p>
-    <textarea id="scoresrc" spellcheck="false" style="min-height:130px"
-              placeholder="30101&#9;15&#10;30102&#9;13&#10;30103&#9;상"></textarea>
-    <div id="scorenotices" style="margin-top:.85rem"></div>
-    <div class="stats" id="scorestats"></div>
-    <p class="hint" id="scoredist"></p>
-  </div>
+    <!-- ═══ 인원 ═══ -->
+    <section id="sec-count" class="sec" aria-labelledby="h-count">
+      <h2 id="h-count">이 활동 대상은 몇 명입니까</h2>
+      <p class="measure" id="count-desc">명단을 보기 전에 아시는 수를 적어 주세요. 정원에서 전출·자퇴를 뺀 수입니다. 이 수와 붙여넣은 명단이 다르면 화면이 그 자리에서 말합니다.</p>
+      <p class="field">
+        <label for="count-input" class="sr-only">이 활동 대상은 몇 명입니까</label>
+        <input type="text" inputmode="numeric" pattern="[0-9]{1,3}" id="count-input" aria-describedby="count-desc">
+        <span>명</span>
+      </p>
+      <div id="count-feedback" aria-live="polite"></div>
+    </section>
 
-  <div class="card" id="savecard" hidden>
-    <h2>4 · 저장</h2>
-    <p class="hint">저장 위치를 물으면 <strong>활동 폴더</strong>를 고르세요. 위치를 묻지 않는 브라우저에서는 내려받기 폴더로 떨어지니 활동 폴더로 옮겨 주세요.</p>
-    <div class="actions">
-      <button class="primary" id="save">저장</button>
-      <span class="hint" id="saved"></span>
-    </div>
-  </div>
-</section>
+    <hr class="rule">
 
-<!-- ═══════════════════ 탭 B · 검수 ═══════════════════ -->
-<section id="pane-b" hidden>
-  <h1>세특 검수</h1>
-  <p class="sub">
-    <code>검수번들.json</code>을 불러 원문과 세특을 나란히 보며 고칩니다.
-    저장하면 <b>실명 검수본</b>(로컬 보관용)과 <b>토큰 diff</b>(AI에게 줄 것)가 함께 나옵니다.
-  </p>
+    <!-- ═══ 명단 ═══ -->
+    <section id="sec-roster" class="sec" aria-labelledby="h-roster">
+      <h2 id="h-roster">명단 붙여넣기</h2>
+      <p class="measure" id="roster-desc">엑셀에서 학번 열과 이름 열을 함께 긁어(Ctrl+C) 붙여넣으세요. 따로 두 번 붙이면 행이 어긋나고, 어긋난 명단은 어떤 검사로도 잡히지 않습니다.</p>
+      <label for="src" class="sr-only">명단 붙여넣기</label>
+      <textarea id="src" spellcheck="false" aria-describedby="roster-desc" placeholder="30101&#9;김하늘&#10;30102&#9;이서준"></textarea>
+    </section>
 
-  <div class="bar">
-    <input type="file" id="rv-load" accept=".json">
-    <span class="grow"></span>
-    <span class="prog" id="rv-prog"></span>
-    <button id="rv-onlyflag">우선 검토만</button>
-    <button class="primary" id="rv-save" disabled>검수본 저장</button>
-    <span class="prog" id="rv-saved"></span>
-  </div>
+    <!-- ═══ 확인 (붙여넣기 직후에만) ═══ -->
+    <section id="sec-check" class="sec" hidden aria-labelledby="h-check">
+      <h2 id="h-check" tabindex="-1">확인</h2>
 
-  <div id="rv-head"></div>
-  <div id="rv-list"></div>
-</section>
+      <div id="check-count-line" aria-live="polite"></div>
 
-<p class="privacy">
-  이 페이지는 <strong>서버가 없습니다.</strong> 인터넷을 끊어도 동작하며, 붙여넣거나 불러온 명단·원문은
-  이 브라우저 밖으로 나가지 않습니다. 저장 버튼은 이 컴퓨터에 파일을 쓸 뿐 어디에도 전송하지 않습니다.
-  <br><b>명렬.json·점수원본.json·검수본.json에는 실명이 들어 있으므로 AI에게 주지 마십시오</b> —
-  AI에게 줄 것은 <code>검수diff.json</code>뿐입니다. 검수가 끝나면
-  <code>pseudonymize.py destroy --dir &lt;활동폴더&gt; --yes</code>로 중간 파일을 파기하세요.
-</p>
-</main>
+      <fieldset id="check-col">
+        <legend>첫 줄을 이렇게 읽었습니다.</legend>
+        <dl class="kv">
+          <div><dt>학번</dt><dd id="check-col-id"></dd></div>
+          <div><dt>이름</dt><dd id="check-col-name"></dd></div>
+        </dl>
+        <div class="btnrow">
+          <button type="button" class="btn" id="btn-col-ok">맞습니다</button>
+          <button type="button" class="btn" id="btn-col-swap">열이 바뀌었습니다</button>
+        </div>
+        <p class="measure hint" id="save-gate-note">저장은 위 확인을 마치신 뒤에 나옵니다.</p>
+      </fieldset>
+
+      <div>
+        <h3 id="h-errata">손봐야 할 곳</h3>
+        <div id="errata-list"></div>
+      </div>
+
+      <p class="measure limits">이 검사가 못 잡는 것 — 이름끼리 자기들끼리 뒤바뀐 명단입니다. 표의 이름 몇 개를 눈으로 확인해 주세요.</p>
+
+      <div class="tablewrap">
+        <table>
+          <caption class="sr-only" id="roster-caption"></caption>
+          <thead><tr><th scope="col">순번</th><th scope="col">학번</th><th scope="col">이름</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr class="rule">
+
+    <!-- ═══ 점수 ═══ -->
+    <section id="sec-score" class="sec" aria-labelledby="h-score">
+      <h2 id="h-score">점수 (선택)</h2>
+      <p class="measure" id="score-desc">채점표에서 학번 열과 점수 열을 함께 긁어 붙여넣으세요. 비워 두면 점수 없이 진행합니다.</p>
+      <p class="measure hint" id="score-wait">명단을 먼저 붙여넣으시면 어느 열이 점수인지 대조할 수 있습니다.</p>
+      <label for="scoresrc" class="sr-only">점수</label>
+      <textarea id="scoresrc" spellcheck="false" aria-describedby="score-desc" placeholder="30101&#9;15&#10;30102&#9;13"></textarea>
+      <div id="scorenotices"></div>
+
+      <div id="submission" hidden>
+        <h3>제출 여부</h3>
+        <p class="measure" id="submission-lead"></p>
+        <div id="submission-list"></div>
+        <p class="measure hint">미제출로 표시하면 활동 참여 사실만 담은 예외 세특으로 처리됩니다.</p>
+      </div>
+    </section>
+
+    <hr class="rule">
+
+    <!-- ═══ 저장 ═══ -->
+    <section id="sec-save" class="sec" aria-labelledby="h-save">
+      <h2 id="h-save">저장</h2>
+
+      <div class="rolebox-row">
+        <section class="rolebox rolebox-local empty" aria-labelledby="rb-local-title">
+          <h3 id="rb-local-title">이 컴퓨터에만 두는 것</h3>
+          <div id="rb-local-body">
+            <p>이 화면에서는 아직 만들지 않았습니다.</p>
+            <p>활동 폴더에 이미 있을 수 있습니다 — 화면은 폴더를 볼 수 없습니다.</p>
+          </div>
+        </section>
+        <section class="rolebox rolebox-ai" aria-labelledby="rb-ai-title">
+          <h3 id="rb-ai-title">AI에게 주는 것</h3>
+          <div id="rb-ai-body">
+            <p>이 화면에서는 아직 만들지 않았습니다.</p>
+            <p>검수를 마치면 여기에 검수diff(AI용).json이 생깁니다. 이름도 학번도 들어가지 않습니다.</p>
+          </div>
+        </section>
+      </div>
+
+      <div id="save-actions"></div>
+      <p class="measure hint" id="save-waiting">명단을 붙여넣고 열이 맞는지 확인하시면 여기에 저장 단추가 나타납니다.</p>
+    </section>
+
+    <!-- ═══ 이중선: 대화로 돌아가기 ═══ -->
+    <section class="bridge" aria-labelledby="h-bridge">
+      <hr class="rule-double">
+      <h2 id="h-bridge">여기서 대화로 돌아갑니다</h2>
+      <p>저장을 마치면 규칙·구조·표본을 정하는 대화가 20~60분 이어집니다. 그동안 이 창은 닫으셔도 됩니다. 끝나면 다시 열어 아래로 오세요.</p>
+      <hr class="rule-double">
+    </section>
+
+    <!-- ═══ 검수 ═══ -->
+    <section id="sec-review" class="sec sec-wide" aria-labelledby="h-review">
+      <h2 id="h-review" tabindex="-1">검수<output id="review-progress" aria-live="polite"></output></h2>
+
+      <div id="review-empty">
+        <p class="measure">원문과 세특을 나란히 놓고 고치는 곳입니다.</p>
+        <p class="measure">활동 폴더의 검수번들.json을 이 자리에 끌어다 놓거나 아래 단추로 고르세요.</p>
+        <p class="measure">파일이 아직 없다면 대화로 돌아가 전체 생성을 마치세요. 생성이 끝나야 이 파일이 만들어집니다.</p>
+        <div id="review-drop">
+          <input type="file" id="rv-load" accept=".json">
+          <label for="rv-load" class="btn">검수번들.json 고르기</label>
+        </div>
+      </div>
+
+      <div id="review-body" hidden></div>
+    </section>
+
+    <hr class="rule">
+
+    <!-- ═══ 검수 저장 ═══ -->
+    <section id="sec-review-save" class="sec" aria-labelledby="h-review-save">
+      <h2 id="h-review-save">검수 저장</h2>
+      <div id="review-save-body">
+        <p class="measure hint">검수번들.json을 불러오면 여기에 저장 단추가 나타납니다.</p>
+      </div>
+    </section>
+
+    <hr class="rule">
+
+    <!-- ═══ 정리 ═══ -->
+    <section id="sec-cleanup" class="sec" aria-labelledby="h-cleanup">
+      <h2 id="h-cleanup">정리</h2>
+      <p class="measure">검수까지 마치면 실명이 든 중간 파일을 지웁니다. 대화창에 이렇게 말씀하세요.</p>
+      <p><code>중간 파일 파기해 줘</code></p>
+      <p class="measure hint">지울 목록을 먼저 보여 드리고, 확인하신 뒤에 지웁니다.</p>
+    </section>
+
+  </main>
+</div>
 
 <script>
 "use strict";
-/* ───────────────────────── 공통 ───────────────────────── */
+/* ═════════════════════════ 공통 ═════════════════════════ */
 const norm = s => (s || "").replace(/\s+/g, "");
 const isDigits = s => /^\d+$/.test(norm(s));
 const hasKorean = s => /[가-힣]/.test(s || "");
@@ -219,7 +582,7 @@ const esc = s => String(s == null ? "" : s)
   .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 const U8 = s => new TextEncoder().encode(s || "").length;
-/** 엑셀 =(LENB-LEN)*2+LEN 과 같은 셈(한글 2바이트). 기준이 확정되면 하나로 줄인다. */
+/** 엑셀 =(LENB-LEN)*2+LEN 과 같은 셈(한글 2바이트). 화면은 이 기준(NEIS)만 보여준다. */
 const B2 = s => [...(s || "")].reduce((n, c) => n + (c.codePointAt(0) > 127 ? 2 : 1), 0);
 
 /** 붙여넣은 텍스트를 표로 쪼갠다. 탭 → 여러 칸 → 쉼표 순으로 시도한다. */
@@ -240,8 +603,8 @@ function median(xs) {
 
 /**
  * 파일을 저장한다. 브라우저가 저장 위치 선택을 지원하면 그쪽을 쓰고,
- * 안 되면 내려받기로 떨어뜨린다 — 로컬 파일(file://)에서는 위치 선택이
- * 막혀 있는 브라우저가 있어 어느 쪽이든 동작하게 둔다.
+ * 안 되면 내려받기로 떨어뜨린다. 후자는 성공 콜백이 없으므로 "저장했다"고
+ * 단언하지 않고 "내려받기 폴더 확인"이라고만 말한다(A13).
  */
 async function saveFile(name, obj) {
   const text = JSON.stringify(obj, null, 1);
@@ -269,26 +632,34 @@ async function saveFile(name, obj) {
   return "내려받기 폴더";
 }
 
-/* 탭 — 화면만 바꾼다. 탭 사이에 자료를 저장하지 않는다(실명이 브라우저에 눌러앉지 않게). */
-function showTab(which) {
-  document.getElementById("pane-a").hidden = which !== "a";
-  document.getElementById("pane-b").hidden = which !== "b";
-  document.getElementById("tab-a").setAttribute("aria-selected", String(which === "a"));
-  document.getElementById("tab-b").setAttribute("aria-selected", String(which === "b"));
+function setStatus(text) {
+  const el = document.getElementById("status");
+  if (el) el.textContent = text;
 }
-document.getElementById("tab-a").addEventListener("click", () => showTab("a"));
-document.getElementById("tab-b").addEventListener("click", () => showTab("b"));
 
-/* ─────────────────── 탭 A · 명단과 점수 ─────────────────── */
+/* ═════════════════════════ ROSTER (인원·명단·점수·저장) ═════════════════════════ */
 const ROSTER = (() => {
   const HEADER_ID = ["학번", "번호", "학생번호", "학년반번호"];
   const HEADER_NAME = ["이름", "성명", "학생명"];
-  const state = { students: [], scores: [] };
+
+  const state = {
+    students: [], scores: [],
+    expectedCount: null, expectedSource: null, expectedResolvedByEscape: false,
+    rows: [], cols: null,
+    blank: 0, blankRows: [],
+    dupRows: [], dupResolution: null,          // null | "drop-later" | "keep-both"
+    multiClassPrefixes: [], multiClassResolution: null, // null | prefix | "keep-both"
+    sheetSplitRow: null, sheetSplitResolution: null,    // null | "cut" | "keep"
+    shortIdAcknowledged: false,
+    colConfirmed: false,
+    submission: {},          // 학번 → "제출함" | "미제출"
+    savedRoster: false,
+    dirtySinceSave: false,
+  };
 
   /**
    * 어느 열이 학번이고 어느 열이 이름인지 정한다.
-   * 헤더가 있으면 헤더를 믿고, 없으면 값의 생김새로 판정한다 —
-   * "번호"라는 글자는 모호해도 값이 1..30인지 30101..인지는 분명하다.
+   * 헤더가 있으면 헤더를 믿고, 없으면 값의 생김새로 판정한다.
    */
   function pickColumns(rows) {
     const width = Math.max(...rows.map(r => r.length));
@@ -312,7 +683,6 @@ const ROSTER = (() => {
       });
     }
     const cand = score.filter(Boolean);
-    // 학번: 숫자 비율이 높고, 그중 자릿수가 긴 열(출석번호 1~2자리보다 학번 5자리 우선)
     const idCol = cand.filter(s => s.digitRatio >= 0.8)
                       .sort((a, b) => b.medianLen - a.medianLen || b.digitRatio - a.digitRatio)[0];
     const nameCol = cand.filter(s => s.koreanRatio >= 0.6 && (!idCol || s.c !== idCol.c))
@@ -321,37 +691,337 @@ const ROSTER = (() => {
     return { id: idCol.c, name: nameCol.c, body, via: "값 판별", idLen: idCol.medianLen };
   }
 
-  /**
-   * 점수 붙여넣기를 읽는다. 명렬을 이미 갖고 있으므로 학번 열을 명렬과 대조해 고른다 —
-   * 채점표에서 어느 숫자 열이 점수인지 헷갈릴 일이 없어진다.
-   */
+  function isHeaderLikeRow(r, cols) {
+    const idVal = norm(r[cols.id] || "");
+    const nameVal = norm(r[cols.name] || "");
+    return HEADER_ID.includes(idVal) && HEADER_NAME.includes(nameVal);
+  }
+
+  /** cols.body + 지금까지의 복구 선택(정오표)을 반영해 state.students와 정오표 재료를 다시 만든다. */
+  function derive() {
+    const cols = state.cols;
+    if (!cols) return;
+    const headerOffset = state.rows.length - cols.body.length;
+    let body = cols.body.map((r, i) => ({ r, rowNum: headerOffset + i + 1 }));
+
+    // 1) 시트 여럿(머리글 재등장)
+    const splitAt = body.findIndex((x, i) => i > 0 && isHeaderLikeRow(x.r, cols));
+    state.sheetSplitRow = splitAt >= 0 ? body[splitAt].rowNum : null;
+    if (state.sheetSplitResolution === "cut" && splitAt >= 0) {
+      body = body.slice(0, splitAt);
+    }
+
+    // 2) 학번/이름 채우기 + 빈 행
+    let list = [];
+    let blank = 0, blankRows = [];
+    for (const { r, rowNum } of body) {
+      const sid = norm(r[cols.id] || "");
+      const name = (r[cols.name] || "").trim();
+      if (!sid && !name) continue;
+      if (!sid || !name) { blank++; blankRows.push(rowNum); continue; }
+      list.push({ 학번: sid, 이름: name, rowNum });
+    }
+    state.blank = blank; state.blankRows = blankRows;
+
+    // 3) 여러 반 혼재(학번 앞 3자리 두 종류)
+    const prefixes = [...new Set(list.map(s => s.학번.slice(0, 3)))];
+    state.multiClassPrefixes = prefixes.length === 2 ? prefixes : [];
+    if (state.multiClassResolution && state.multiClassResolution !== "keep-both") {
+      list = list.filter(s => s.학번.slice(0, 3) === state.multiClassResolution);
+    }
+
+    // 4) 중복 학번
+    const seen = new Map();
+    const dupRows = [];
+    list = list.map(s => {
+      const isDup = seen.has(s.학번);
+      if (isDup) dupRows.push({ rowNum: s.rowNum, first: seen.get(s.학번), sid: s.학번 });
+      else seen.set(s.학번, s.rowNum);
+      return { ...s, 중복: isDup };
+    });
+    state.dupRows = dupRows;
+    if (state.dupResolution === "drop-later") {
+      list = list.filter(s => !s.중복);
+    }
+
+    // 기존 제출/제출 판단 값을 최대한 보존
+    const prevByKey = new Map(state.students.map(s => [s.학번, s]));
+    state.students = list.map(s => {
+      const prev = prevByKey.get(s.학번);
+      return { 학번: s.학번, 이름: s.이름, 중복: s.중복, 제출: prev ? prev.제출 : true };
+    });
+  }
+
+  function pasteLooksLikeRoster(text) {
+    return /[\t\n]/.test(text) || norm(text).length > 4;
+  }
+
+  function setExpectedCount(raw) {
+    const digits = norm(raw).replace(/\D/g, "");
+    state.expectedCount = digits ? Number(digits) : null;
+    state.expectedSource = digits ? "직접입력" : null;
+    state.expectedResolvedByEscape = false;
+  }
+
+  function useRosterCountInstead() {
+    state.expectedCount = state.students.length;
+    state.expectedSource = "명단확인후";
+    state.expectedResolvedByEscape = true;
+  }
+
+  function countMessage() {
+    const n = state.students.length;
+    if (state.expectedCount == null) {
+      return {
+        kind: "awaiting",
+        text: "명단을 받았습니다. 위 칸에 아시는 수를 먼저 적어 주세요 — 적으신 뒤라야 대조가 의미를 갖습니다.",
+        escapeLabel: "모르겠습니다. 명단을 보고 정하겠습니다",
+      };
+    }
+    if (state.expectedResolvedByEscape) {
+      return { kind: "escaped", text: `명단에서 센 ${n}명으로 진행합니다. 이 수는 따로 대조하지 않았습니다.` };
+    }
+    if (state.expectedCount === n) {
+      return { kind: "match", text: `${n}명을 읽었습니다. 적어 두신 ${state.expectedCount}명과 같습니다.` };
+    }
+    return {
+      kind: "mismatch",
+      text: `적어 두신 ${state.expectedCount}명과 붙여넣은 ${n}명이 다릅니다.`,
+      sub: "명단에서 다시 세지 마시고, 어느 쪽이 맞는지 원본 표를 확인해 주세요.",
+    };
+  }
+
+  function swapColumns() {
+    if (!state.cols) return;
+    const c = state.cols;
+    state.cols = { ...c, id: c.name, name: c.id };
+    state.colConfirmed = false;
+    derive();
+  }
+
+  function confirmColumns() { state.colConfirmed = true; }
+
+  function resolveDuplicates(action) { state.dupResolution = action; derive(); }
+  function resolveMultiClass(choice) { state.multiClassResolution = choice; derive(); }
+  function resolveSheetSplit(action) { state.sheetSplitResolution = action; derive(); }
+  function acknowledgeShortId() { state.shortIdAcknowledged = true; }
+
+  function parse() {
+    const text = document.getElementById("src").value;
+    state.rows = splitRows(text);
+    if (!state.rows.length) {
+      state.cols = null;
+      state.students = [];
+      document.getElementById("sec-check").hidden = true;
+      renderSaveGate();
+      return;
+    }
+    const cols = pickColumns(state.rows);
+    state.cols = cols;
+    state.colConfirmed = false;
+    state.dupResolution = null;
+    state.multiClassResolution = null;
+    state.sheetSplitResolution = null;
+    state.shortIdAcknowledged = false;
+
+    document.getElementById("sec-check").hidden = false;
+
+    if (!cols) {
+      state.students = [];
+      renderCheck(true);
+      renderSaveGate();
+      parseScores();
+      return;
+    }
+    derive();
+    renderCheck(false);
+    renderSaveGate();
+    parseScores();
+  }
+
+  /* ── 렌더링 ── */
+  function renderCheck(colsFailed) {
+    const countLineEl = document.getElementById("check-count-line");
+    const msg = countMessage();
+    if (msg.kind === "mismatch") {
+      countLineEl.innerHTML =
+        `<p class="stopline t-body strong">${esc(msg.text)}<br>${esc(msg.sub)}</p>`;
+    } else if (msg.kind === "awaiting") {
+      countLineEl.innerHTML =
+        `<p class="t-body strong">${esc(msg.text)}</p>` +
+        `<div class="btnrow"><button type="button" class="btn" id="btn-count-escape">${esc(msg.escapeLabel)}</button></div>`;
+      const btn = document.getElementById("btn-count-escape");
+      if (btn) btn.addEventListener("click", () => {
+        useRosterCountInstead();
+        renderCheck(colsFailed);
+      });
+    } else {
+      countLineEl.innerHTML = `<p class="t-body strong">${esc(msg.text)}</p>`;
+    }
+
+    const colBlock = document.getElementById("check-col");
+    if (colsFailed) {
+      colBlock.hidden = true;
+    } else {
+      colBlock.hidden = false;
+      const first = state.cols.body.find(r => (r[state.cols.id] || r[state.cols.name]));
+      document.getElementById("check-col-id").textContent = first ? (first[state.cols.id] || "") : "";
+      document.getElementById("check-col-name").textContent = first ? (first[state.cols.name] || "") : "";
+    }
+
+    renderErrata();
+    renderTable();
+  }
+
+  function renderErrata() {
+    const box = document.getElementById("errata-list");
+    if (!state.cols) { box.innerHTML = ""; return; }
+    const items = [];
+
+    if (state.sheetSplitRow && state.sheetSplitResolution == null) {
+      items.push(`<div class="errata-item">
+        <p>${state.sheetSplitRow}행에서 머리글로 보이는 줄(학번 이름)이 다시 나옵니다. 표 두 개를 이어 붙이신 것 같습니다.</p>
+        <div class="btnrow">
+          <button type="button" class="btn" data-action="sheet-cut">${state.sheetSplitRow}행부터 잘라내기</button>
+          <button type="button" class="btn" data-action="sheet-keep">그대로 두기</button>
+        </div></div>`);
+    }
+
+    if (state.dupRows.length && state.dupResolution == null) {
+      const detail = state.dupRows.map(d => `${d.first}행 ${esc(d.sid)} · ${d.rowNum}행 ${esc(d.sid)}`).join(" · ");
+      items.push(`<div class="errata-item">
+        <p>학번이 겹치는 행이 ${state.dupRows.length}개 있습니다. (${detail})</p>
+        <p class="cause">여러 반을 함께 붙여넣었거나 출석번호를 학번으로 쓴 표일 수 있습니다.</p>
+        <div class="btnrow">
+          <button type="button" class="btn" data-action="dup-drop">뒤엣것 지우기</button>
+          <button type="button" class="btn" data-action="dup-keep">둘 다 두기</button>
+        </div></div>`);
+    }
+
+    if (state.multiClassPrefixes.length === 2 && state.multiClassResolution == null) {
+      const [a, b] = state.multiClassPrefixes;
+      items.push(`<div class="errata-item">
+        <p>학번 앞자리가 ${esc(a)}·${esc(b)} 두 가지입니다. 두 반을 함께 붙여넣으셨습니까?</p>
+        <div class="btnrow">
+          <button type="button" class="btn" data-action="class-${esc(a)}">${esc(a)}반만 두기</button>
+          <button type="button" class="btn" data-action="class-${esc(b)}">${esc(b)}반만 두기</button>
+          <button type="button" class="btn" data-action="class-both">둘 다 두기</button>
+        </div></div>`);
+    }
+
+    if (state.blank > 0) {
+      items.push(`<div class="errata-item"><p>학번이나 이름이 빈 행 ${state.blank}개를 건너뛰었습니다. (${state.blankRows.join(", ")}행)</p></div>`);
+    } else {
+      items.push(`<div class="errata-item"><p>버린 행은 없습니다.</p></div>`);
+    }
+
+    if (state.cols.via === "값 판별" && state.cols.idLen && state.cols.idLen <= 2 && !state.shortIdAcknowledged) {
+      items.push(`<div class="errata-item">
+        <p>학번으로 읽은 값이 1, 2, 3 …처럼 짧습니다. 출석번호 열을 학번으로 읽었을 수 있습니다.</p>
+        <div class="btnrow"><button type="button" class="btn" data-action="col-swap">열이 바뀌었습니다</button></div></div>`);
+    }
+
+    box.innerHTML = items.join("");
+    box.querySelectorAll("button[data-action]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const action = btn.dataset.action;
+        if (action === "sheet-cut") resolveSheetSplit("cut");
+        else if (action === "sheet-keep") resolveSheetSplit("keep");
+        else if (action === "dup-drop") resolveDuplicates("drop-later");
+        else if (action === "dup-keep") resolveDuplicates("keep-both");
+        else if (action === "col-swap") { swapColumns(); }
+        else if (action.startsWith("class-")) {
+          const v = action.slice(6);
+          resolveMultiClass(v === "both" ? "keep-both" : v);
+        }
+        renderCheck(false);
+        renderSaveGate();
+        parseScores();
+      });
+    });
+  }
+
+  function renderTable() {
+    document.getElementById("roster-caption").textContent = `읽어 들인 명단 ${state.students.length}명`;
+    document.getElementById("tbody").innerHTML = state.students.map((s, i) => `
+      <tr>
+        <td>${i + 1}</td><td>${esc(s.학번)}</td>
+        <td${s.중복 ? ' class="dupword"' : ""}>${esc(s.이름)}${s.중복 ? " 중복" : ""}</td>
+      </tr>`).join("");
+  }
+
+  function renderSaveGate() {
+    const el = document.getElementById("save-actions");
+    const waiting = document.getElementById("save-waiting");
+    // 단추가 없는 이유를 그 자리에서 말한다. 단추가 생기면 이 문구는 사라진다.
+    if (waiting) waiting.hidden = !!state.colConfirmed;
+    if (!state.colConfirmed) { el.innerHTML = ""; el.dataset.rendered = ""; return; }
+    if (el.dataset.rendered !== "1") {
+      el.innerHTML = `<div class="btnrow"><button type="button" class="btn primary" id="btn-save">저장</button></div><p id="save-result" aria-live="polite"></p>`;
+      el.dataset.rendered = "1";
+      document.getElementById("btn-save").addEventListener("click", onSaveClick);
+    }
+  }
+
+  /* ── 점수 ── */
+  function renderSubmission() {
+    const box = document.getElementById("submission");
+    const lead = document.getElementById("submission-lead");
+    const list = document.getElementById("submission-list");
+    const scoredIds = new Set(state.scores.map(it => it.학번));
+    const scoreless = state.students.filter(s => !scoredIds.has(s.학번));
+
+    if (state.scores.length === 0) {
+      box.hidden = true;
+      return;
+    }
+    if (!scoreless.length) { box.hidden = true; return; }
+
+    box.hidden = false;
+    lead.textContent = `점수가 없는 학생 ${scoreless.length}명입니다. 미제출입니까?`;
+    list.innerHTML = scoreless.map(s => {
+      const name = `sub-${esc(s.학번)}`;
+      const cur = state.submission[s.학번];
+      return `<div class="radiorow" role="group" aria-label="${esc(s.학번)} ${esc(s.이름)} 제출 여부">
+        <span>${esc(s.학번)} ${esc(s.이름)}</span>
+        <label><input type="radio" name="${name}" value="미제출" ${cur === "미제출" ? "checked" : ""}> 미제출</label>
+        <label><input type="radio" name="${name}" value="제출했음" ${cur === "제출했음" ? "checked" : ""}> 제출했음</label>
+      </div>`;
+    }).join("");
+    list.querySelectorAll("input[type=radio]").forEach(r => {
+      r.addEventListener("change", e => {
+        const sid = e.target.name.replace("sub-", "");
+        state.submission[sid] = e.target.value;
+        const stu = state.students.find(s => s.학번 === sid);
+        if (stu) stu.제출 = e.target.value !== "미제출";
+      });
+    });
+  }
+
   function parseScores() {
     const wrap = document.getElementById("scorenotices");
-    const stats = document.getElementById("scorestats");
-    const dist = document.getElementById("scoredist");
-    wrap.innerHTML = ""; stats.innerHTML = ""; dist.textContent = "";
+    const dist = document.getElementById("score-wait");
+    wrap.innerHTML = "";
     state.scores = [];
 
     const rows = splitRows(document.getElementById("scoresrc").value);
-    if (!rows.length) return;
+    document.getElementById("score-wait").style.display = state.students.length ? "none" : "";
+    if (!rows.length) { renderSubmission(); return; }
 
     const known = new Set(state.students.map(s => s.학번));
     const width = Math.max(...rows.map(r => r.length));
 
-    // 학번 열: 명렬과 가장 많이 일치하는 열
     let idCol = -1, best = 0;
     for (let c = 0; c < width; c++) {
       const hit = rows.filter(r => known.has(norm(r[c] || ""))).length;
       if (hit > best) { best = hit; idCol = c; }
     }
     if (idCol < 0) {
-      wrap.innerHTML = '<div class="notice bad">붙여넣은 값에서 명렬의 학번을 하나도 찾지 못했습니다. 학번 열이 함께 선택됐는지 확인해 주세요.</div>';
+      wrap.innerHTML = '<p class="measure">붙여넣은 값에서 명렬의 학번을 하나도 찾지 못했습니다. 학번 열이 함께 선택됐는지 확인해 주세요.</p>';
+      renderSubmission();
       return;
     }
 
-    // 값 열: 학번 열과 이름 열을 뺀 나머지 중 숫자 비율이 가장 높은 열.
-    // 학번·이름·점수 3열을 붙여넣는 경우가 흔한데, 단순히 "값이 많이 찬 열"로
-    // 고르면 이름 열을 점수로 읽어 버린다.
     const knownNames = new Set(state.students.map(s => s.이름));
     let valCol = -1, bestScore = -1;
     for (let c = 0; c < width; c++) {
@@ -359,14 +1029,14 @@ const ROSTER = (() => {
       const cells = rows.map(r => (r[c] || "").trim()).filter(v => v !== "");
       if (!cells.length) continue;
       const nameHit = cells.filter(v => knownNames.has(v)).length / cells.length;
-      if (nameHit >= 0.5) continue;                       // 이름 열은 점수가 아니다
+      if (nameHit >= 0.5) continue;
       const numeric = cells.filter(v => /^-?\d+(\.\d+)?$/.test(v)).length / cells.length;
-      // 숫자 열을 우선하되, 등급만 있는 표(상/중/하)도 받을 수 있게 채움 비율을 보조로 쓴다
       const rank = numeric * 10 + cells.length / rows.length;
       if (rank > bestScore) { bestScore = rank; valCol = c; }
     }
     if (valCol < 0) {
-      wrap.innerHTML = '<div class="notice bad">점수 열을 찾지 못했습니다. 학번과 점수 두 열을 함께 붙여넣어 주세요.</div>';
+      wrap.innerHTML = '<p class="measure">점수 열을 찾지 못했습니다. 학번과 점수 두 열을 함께 붙여넣어 주세요.</p>';
+      renderSubmission();
       return;
     }
 
@@ -377,7 +1047,7 @@ const ROSTER = (() => {
       const sid = norm(r[idCol] || "");
       const raw = (r[valCol] || "").trim();
       if (!sid) return;
-      if (!known.has(sid)) { unknown++; return; }   // 헤더 줄이나 다른 반이 섞인 경우
+      if (!known.has(sid)) { unknown++; return; }
       if (seen.has(sid)) return;
       seen.add(sid);
       if (raw === "") { blank++; return; }
@@ -387,163 +1057,148 @@ const ROSTER = (() => {
 
     const notes = [];
     if (numeric && graded)
-      notes.push(["bad", `숫자 점수 ${numeric}건과 등급 ${graded}건이 섞여 있습니다. 한 가지로 통일해 주세요.`]);
+      notes.push(`숫자 점수 ${numeric}건과 등급 ${graded}건이 섞여 있습니다. 한 가지로 통일해 주세요.`);
     const missing = state.students.filter(s => s.제출 && !seen.has(s.학번)).length;
-    if (missing) notes.push(["warn", `제출자 중 점수가 붙여넣기에 없는 학생 ${missing}명.`]);
-    if (unknown) notes.push(["warn", `명렬에 없는 학번 ${unknown}줄을 건너뛰었습니다(헤더 줄이거나 다른 반일 수 있습니다).`]);
-    if (blank) notes.push(["warn", `점수 칸이 빈 학생 ${blank}명.`]);
-    wrap.innerHTML = notes.map(([k, m]) => `<div class="notice ${k}">${m}</div>`).join("");
+    if (missing) notes.push(`제출자 중 점수가 붙여넣기에 없는 학생 ${missing}명.`);
+    if (unknown) notes.push(`명렬에 없는 학번 ${unknown}줄을 건너뛰었습니다(헤더 줄이거나 다른 반일 수 있습니다).`);
+    if (blank) notes.push(`점수 칸이 빈 학생 ${blank}명.`);
+    wrap.innerHTML = notes.map(m => `<p class="measure">${esc(m)}</p>`).join("");
 
     state.scores = (numeric && graded) ? [] : items;
-
-    stats.innerHTML = [
-      ["", `${items.length}명`],
-      [missing ? "warn" : "", `누락 ${missing}`],
-      [unknown ? "warn" : "", `제외 ${unknown}`],
-    ].map(([k, t]) => `<span class="chip ${k}">${t}</span>`).join("");
-
-    const tally = {};
-    items.forEach(it => {
-      const key = "점수" in it ? it.점수 : it.등급;
-      tally[key] = (tally[key] || 0) + 1;
-    });
-    const keys = Object.keys(tally).sort((a, b) =>
-      (isNaN(a) || isNaN(b)) ? String(a).localeCompare(b) : Number(b) - Number(a));
-    dist.textContent = keys.length
-      ? "분포 — " + keys.map(k => `${k}${numeric ? "점" : ""} ${tally[k]}명`).join(", ")
-      : "";
+    renderSubmission();
   }
 
-  function parse() {
-    const rows = splitRows(document.getElementById("src").value);
-    const result = document.getElementById("result");
-    const savecard = document.getElementById("savecard");
-    if (rows.length < 1) { result.hidden = true; savecard.hidden = true; return; }
+  /* ── 저장 ── */
+  async function onSaveClick() {
+    const btn = document.getElementById("btn-save");
+    const result = document.getElementById("save-result");
+    btn.textContent = "저장 중…";
+    btn.disabled = true;
 
-    const cols = pickColumns(rows);
-    const notices = document.getElementById("notices");
-    notices.innerHTML = "";
-    if (!cols) {
-      result.hidden = false; savecard.hidden = true;
-      document.getElementById("stats").innerHTML = "";
-      document.getElementById("tbody").innerHTML = "";
-      document.getElementById("colnote").textContent = "";
-      notices.innerHTML = '<div class="notice bad">학번 열과 이름 열을 찾지 못했습니다. 엑셀에서 두 열을 함께 선택해 다시 붙여넣어 주세요.</div>';
-      return;
+    const students = state.students.map(({ 학번, 이름 }) => ({ 학번, 이름 }));
+    const 학번목록 = state.students.filter(s => s.제출).map(s => s.학번);
+
+    const obj = {
+      students,
+      학번목록,
+      항목: state.scores,
+      인원: state.expectedCount,
+      인원출처: state.expectedSource,
+    };
+
+    const where = await saveFile("명렬.json", obj);
+    btn.textContent = "저장";
+    btn.disabled = false;
+
+    if (where === null) { result.textContent = "저장을 취소했습니다."; return; }
+
+    state.savedRoster = true;
+    state.dirtySinceSave = false;
+
+    if (where === "선택한 위치") {
+      setStatus("저장함");
+      result.textContent = `명렬.json을 저장했습니다 — ${students.length}명, 인원 확인됨.`;
+    } else {
+      setStatus("내려받기 폴더 확인");
+      result.textContent = "명렬.json을 내려받았습니다. 브라우저가 막았을 수 있으니 내려받기 폴더에 파일이 있는지 확인해 주세요. 화면은 폴더를 볼 수 없어 여기까지만 말씀드립니다.";
     }
 
-    const seen = new Map();
-    const students = [];
-    let blank = 0, dup = 0;
-    cols.body.forEach(r => {
-      const sid = norm(r[cols.id] || "");
-      const name = (r[cols.name] || "").trim();
-      if (!sid && !name) return;
-      if (!sid || !name) { blank++; return; }
-      const isDup = seen.has(sid);
-      if (isDup) dup++;
-      seen.set(sid, true);
-      students.push({ 학번: sid, 이름: name, 제출: true, 중복: isDup });
-    });
+    // 실명이 든 상태가 되면 제목에 '실명 있음'을 붙인다(§3.6 — 색이 아니라 낱말이 먼저).
+    document.querySelector(".rolebox-local").classList.remove("empty");
+    document.getElementById("rb-local-body").innerHTML =
+      `<p class="filename">명렬.json</p>
+       <p class="meta">${students.length}명 · 실명과 학번 있음</p>
+       <p class="meta">${where === "선택한 위치" ? "저장함" : "내려받기 폴더 확인"}</p>
+       <p>이 파일은 활동 폴더에만 둡니다. 대화창에 열어서 붙여넣지 마세요.</p>`;
 
-    state.students = students;
+    if (!document.getElementById("btn-clear-roster")) {
+      const clearWrap = document.createElement("div");
+      clearWrap.id = "clear-roster-wrap";
+      clearWrap.innerHTML =
+        `<div class="btnrow"><button type="button" class="btn" id="btn-clear-roster">화면에서 명단 지우기</button></div>
+         <p class="measure hint">저장을 마치셨으면 눌러 주세요. 이 브라우저 창에서 이름과 학번이 사라집니다. 파일은 그대로 남습니다.</p>`;
+      document.getElementById("save-actions").appendChild(clearWrap);
+      document.getElementById("btn-clear-roster").addEventListener("click", clearScreen);
+    }
+  }
 
-    const notes = [];
-    if (dup > 0) notes.push(["bad", `학번이 겹치는 행이 ${dup}개 있습니다. 여러 반을 함께 붙여넣었거나 출석번호를 학번으로 쓴 표일 수 있습니다.`]);
-    if (blank > 0) notes.push(["warn", `학번이나 이름이 빈 행 ${blank}개를 건너뛰었습니다.`]);
-    if (cols.via === "값 판별" && cols.idLen && cols.idLen <= 2)
-      notes.push(["warn", "학번으로 고른 열의 값이 1~2자리입니다. 출석번호일 수 있으니 학번 열이 따로 있는지 확인해 주세요."]);
-    notices.innerHTML = notes.map(([k, m]) => `<div class="notice ${k}">${m}</div>`).join("");
+  function clearScreen() {
+    document.getElementById("src").value = "";
+    state.students = [];
+    state.cols = null;
+    state.rows = [];
+    document.getElementById("sec-check").hidden = true;
+    document.getElementById("tbody").innerHTML = "";
+  }
 
-    document.getElementById("stats").innerHTML = [
-      ["", `${students.length}명`],
-      [dup ? "bad" : "", `중복 ${dup}`],
-      [blank ? "warn" : "", `빈칸 ${blank}`],
-    ].map(([k, t]) => `<span class="chip ${k}">${t}</span>`).join("");
-    document.getElementById("colnote").textContent =
-      `열 판별: ${cols.via} — ${cols.id + 1}번째 열을 학번, ${cols.name + 1}번째 열을 이름으로 읽었습니다.`;
+  /* ── 이벤트 바인딩 ── */
+  document.getElementById("count-input").addEventListener("paste", e => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    if (pasteLooksLikeRoster(text)) {
+      e.preventDefault();
+      const rosterEl = document.getElementById("src");
+      rosterEl.value = rosterEl.value ? rosterEl.value + "\n" + text : text;
+      document.getElementById("count-feedback").textContent =
+        "붙여넣으신 것이 명단으로 보여 아래 명단 칸에 넣었습니다. 인원 칸에는 숫자만 적어 주세요.";
+      parse();
+    }
+  });
+  document.getElementById("count-input").addEventListener("input", e => {
+    setExpectedCount(e.target.value);
+    if (state.rows.length) renderCheck(!state.cols);
+  });
 
-    render();
-    result.hidden = false;
-    document.getElementById("scorecard").hidden = students.length === 0;
-    savecard.hidden = students.length === 0;
+  let rosterTimer = null;
+  document.getElementById("src").addEventListener("input", () => {
+    clearTimeout(rosterTimer);
+    rosterTimer = setTimeout(parse, 300);
+  });
+  document.getElementById("src").addEventListener("paste", () => setTimeout(parse, 0));
+  document.getElementById("src").addEventListener("blur", parse);
+
+  let scoreTimer = null;
+  document.getElementById("scoresrc").addEventListener("input", () => {
+    clearTimeout(scoreTimer);
+    scoreTimer = setTimeout(parseScores, 300);
+  });
+  document.getElementById("scoresrc").addEventListener("paste", () => setTimeout(parseScores, 0));
+  document.getElementById("scoresrc").addEventListener("blur", parseScores);
+
+  document.getElementById("btn-col-ok").addEventListener("click", () => {
+    confirmColumns();
+    renderSaveGate();
+  });
+  document.getElementById("btn-col-swap").addEventListener("click", () => {
+    swapColumns();
+    renderCheck(false);
+    renderSaveGate();
     parseScores();
-  }
-
-  function render() {
-    document.getElementById("tbody").innerHTML = state.students.map((s, i) => `
-      <tr class="${s.중복 ? "dup" : ""} ${s.제출 ? "" : "absent"}">
-        <td>${i + 1}</td><td>${esc(s.학번)}</td><td>${esc(s.이름)}</td>
-        <td class="check"><input type="checkbox" data-i="${i}" ${s.제출 ? "checked" : ""}></td>
-      </tr>`).join("");
-    const absent = state.students.filter(s => !s.제출).length;
-    document.getElementById("submitnote").textContent =
-      absent ? `미제출 ${absent}명 — 활동 참여 사실만 담은 예외 세특으로 처리됩니다.` : "전원 제출";
-  }
-
-  document.getElementById("src").addEventListener("input", parse);
-  document.getElementById("scoresrc").addEventListener("input", parseScores);
-  document.getElementById("tbody").addEventListener("change", e => {
-    const i = e.target.dataset.i;
-    if (i === undefined) return;
-    state.students[i].제출 = e.target.checked;
-    render(); parseScores();
-  });
-  document.getElementById("allon").addEventListener("click", () => {
-    state.students.forEach(s => s.제출 = true); render(); parseScores();
-  });
-  document.getElementById("alloff").addEventListener("click", () => {
-    state.students.forEach(s => s.제출 = false); render(); parseScores();
-  });
-  document.getElementById("save").addEventListener("click", async () => {
-    const btn = document.getElementById("save");
-    const saved = document.getElementById("saved");
-    const students = state.students.map(({ 학번, 이름 }) => ({ 학번, 이름 }));
-    const dup = state.students.filter(s => s.중복).length;
-    const 확인사유 = [];
-    if (dup) 확인사유.push(`학번이 겹치는 행 ${dup}개를 붙여넣었습니다.`);
-
-    const files = [
-      ["명렬.json", {
-        students, 출처: "도구.html (붙여넣기)", 방식: "붙여넣기",
-        확인필요: 확인사유.length > 0, 확인사유, 건너뜀: 0, 중복: dup,
-      }],
-      ["제출자.json", { 학번목록: state.students.filter(s => s.제출).map(s => s.학번) }],
-    ];
-    if (state.scores.length) files.push(["점수원본.json", { 항목: state.scores }]);
-
-    btn.disabled = true;
-    const where = [];
-    try {
-      for (const [name, obj] of files) {
-        saved.textContent = `${name} 저장 중…`;
-        const place = await saveFile(name, obj);
-        if (place === null) { saved.textContent = "저장을 취소했습니다."; return; }
-        where.push(place);
-      }
-    } finally { btn.disabled = false; }
-
-    const scoreNote = state.scores.length ? `, 점수 ${state.scores.length}명` : "";
-    saved.textContent =
-      `저장했습니다(${where[where.length - 1]}) — 명렬 ${students.length}명, ` +
-      `제출자 ${state.students.filter(s => s.제출).length}명${scoreNote}`;
   });
 
-  return { splitRows, pickColumns, parseScores, parse, state };
+  window.addEventListener("beforeunload", e => {
+    const dirty = state.students.length > 0 && (!state.savedRoster || state.dirtySinceSave);
+    if (dirty) { e.preventDefault(); e.returnValue = ""; }
+  });
+
+  return {
+    splitRows, pickColumns, parseScores, parse, state,
+    setExpectedCount, useRosterCountInstead, countMessage,
+    swapColumns, confirmColumns,
+    resolveDuplicates, resolveMultiClass, resolveSheetSplit, acknowledgeShortId,
+    derive, clearScreen,
+  };
 })();
 
-/* ───────────────────── 탭 B · 검수 ───────────────────── */
+/* ═════════════════════════ REVIEW (검수) ═════════════════════════ */
 const REVIEW = (() => {
-  let data = null;            // 불러온 번들
-  let original = new Map();   // 토큰(없으면 학번) → 원래 세특·비고
-  let onlyFlag = false;
+  let data = null;
+  let original = new Map();
+  let expandedKey = null;
 
   const keyOf = s => s.토큰 || `학번:${s.학번}`;
 
   /**
-   * 금지 어휘와 금지 문자를 찾는다.
-   * 금지문자패턴은 정규식이다 — 문자 목록처럼 부분일치로 검사하면 패턴 문자열
-   * 자체가 본문에 나올 리 없어 아무것도 잡지 못한다(실제로 그렇게 새어 있었다).
+   * 금지 어휘와 금지 문자를 찾는다. 금지문자패턴은 정규식이다.
    */
   function bannedHits(text) {
     const hits = [];
@@ -553,7 +1208,7 @@ const REVIEW = (() => {
       try {
         for (const c of new Set(text.match(new RegExp(pat, "gu")) || [])) hits.push(c);
       } catch (err) {
-        hits.push(`(금지문자 패턴 오류: ${err.message})`);   // 조용히 넘기지 않는다
+        hits.push(`(금지문자 패턴 오류: ${err.message})`);
       }
     }
     return hits;
@@ -562,87 +1217,183 @@ const REVIEW = (() => {
   function load(json) {
     data = json;
     original = new Map();
+    expandedKey = null;
     (data.students || []).forEach(s => {
       original.set(keyOf(s), { 세특: s.세특 || "", 비고: s.비고 || "" });
       s.검수완료 = false;
       s.검수메모 = "";
     });
-    // 우선 검토 대상을 위로 — 균등 검토는 균등하게 대충 보는 검토가 되기 쉽다.
+    // 우선 검토 대상을 위로 — 이 정렬은 로드 시 한 번만 하고, 이후에는 재정렬하지 않는다(A6).
     data.students.sort((a, b) => (b.우선검토?.length || 0) - (a.우선검토?.length || 0));
-    document.getElementById("rv-save").disabled = false;
+    renderAll();
+  }
+
+  function renderAll() {
+    if (!data) return;
+    document.getElementById("review-empty").hidden = true;
+    document.getElementById("review-body").hidden = false;
     renderHead();
-    render();
+    renderList();
+    renderSaveSection();
   }
 
   function renderHead() {
-    const flagged = data.students.filter(s => s.우선검토?.length).length;
-    document.getElementById("rv-head").innerHTML = data.활동명
-      ? `<div class="notice warn">${esc(data.활동명)} · 총 ${data.students.length}명 중 우선 검토 <b>${flagged}명</b>.
-         목표 ${data.목표바이트 ?? "?"} / 상한 ${data.상한바이트 ?? "?"} 바이트.
-         바이트는 UTF-8과 2바이트 기준을 함께 보여 줍니다(기준 확정 전).</div>`
-      : "";
+    const done = data.students.filter(s => s.검수완료).length;
+    const changed = data.students.filter(s => original.get(keyOf(s))?.세특 !== s.세특).length;
+    document.getElementById("review-progress").textContent =
+      ` · ${data.students.length}명 중 ${done}명 마침 · 수정 ${changed}건`;
   }
 
-  function render() {
-    const shown = data.students.filter(s => !onlyFlag || s.우선검토?.length);
-    document.getElementById("rv-list").innerHTML = shown.map(s => {
-      const idx = data.students.indexOf(s);
-      const tags = [
-        s.반 ? `<span class="tag">${esc(s.반)}</span>` : "",
-        s.톤등급 ? `<span class="tag">톤 ${esc(s.톤등급)}</span>` : "",
-        s.예외 ? `<span class="tag ex">예외</span>` : "",
-        ...(s.우선검토 || []).map(r => `<span class="tag flag">${esc(r)}</span>`),
-      ].join("");
-      return `
-      <div class="card ${s.우선검토?.length ? "flag" : ""} ${s.검수완료 ? "done" : ""}">
-        <div class="head">
-          <span class="who">${esc(s.학번)} ${esc(s.이름)}</span>
-          ${s.핵심소재 ? `<span class="tag">${esc(s.핵심소재)}</span>` : ""}
-          ${tags}
-        </div>
-        <div class="split">
-          <div class="pane">
-            <h3>학생 원문</h3>
-            <div class="source">${esc(s.원문) || '<span style="opacity:.5">원문 없음</span>'}</div>
-          </div>
-          <div class="pane">
-            <h3>세특 (고치면 즉시 반영)</h3>
-            <textarea class="prose" data-i="${idx}">${esc(s.세특)}</textarea>
-            <div class="meta" id="rv-m${idx}"></div>
-            <input class="memo" data-i="${idx}" placeholder="검수 메모 — 왜 고쳤는지 적으면 다음 회차 규칙에 반영됩니다">
-          </div>
-        </div>
-        <div class="foot">
-          <label class="chk"><input type="checkbox" data-i="${idx}" ${s.검수완료 ? "checked" : ""}> 검수 완료</label>
-          ${s.비고 ? `<span class="prog">비고: ${esc(s.비고)}</span>` : ""}
-        </div>
-      </div>`;
-    }).join("");
-    shown.forEach(s => meta(data.students.indexOf(s)));
-    progress();
+  function rowHtml(s, idx) {
+    const reason = (s.우선검토 && s.우선검토[0]) || "";
+    const byte = B2(s.세특);
+    const cls = ["row"];
+    if (s.검수완료) cls.push("done");
+    return `<li class="${cls.join(" ")}" data-i="${idx}" tabindex="-1" role="button"
+              aria-expanded="${expandedKey === keyOf(s)}">
+      <div class="row-line1">
+        ${reason ? `<span class="reason">${esc(reason)}</span>` : ""}
+        <span class="who">${esc(s.학번)} ${esc(s.이름)}</span>
+        <span class="bytes">${byte}바이트</span>
+        ${s.검수완료 ? `<span class="donemark">마침</span>` : ""}
+      </div>
+      ${s.핵심소재 ? `<div class="row-line2">${esc(s.핵심소재)}</div>` : ""}
+      ${expandedKey === keyOf(s) ? detailHtml(s, idx) : ""}
+    </li>`;
   }
 
-  function meta(i) {
-    const s = data.students[i];
-    const el = document.getElementById("rv-m" + i);
-    if (!el) return;
-    const u = U8(s.세특), b = B2(s.세특);
+  function detailHtml(s, idx) {
+    const u = B2(s.세특);
     const over = data.상한바이트 && u > data.상한바이트;
     const hits = bannedHits(s.세특);
     const changed = original.get(keyOf(s))?.세특 !== s.세특;
-    el.innerHTML =
-      `<span class="${over ? "over" : ""}">${u} 바이트(UTF-8)</span>` +
-      `<span>${b} (2바이트 기준)</span>` +
-      (over ? `<span class="over">상한 ${data.상한바이트} 초과</span>` : "") +
-      (hits.length ? `<span class="hits">금지: ${hits.map(esc).join(", ")}</span>` : "") +
-      (changed ? `<span>수정됨</span>` : "");
+    return `<div class="review-detail">
+      <div class="detail-head">${esc(s.학번)}  ${esc(s.이름)}${s.우선검토?.length ? "  " + esc(s.우선검토.join(" · ")) : ""}</div>
+      <div class="review-panes">
+        <div class="review-pane pane-source">
+          <h4>학생 원문</h4>
+          <div class="source-body">${esc(s.원문) || ""}</div>
+        </div>
+        <div class="review-pane pane-edit">
+          <h4>세특</h4>
+          <textarea class="underline" data-i="${idx}" data-role="seteuk">${esc(s.세특)}</textarea>
+          <div class="review-meta">
+            <span${over ? ' class="over"' : ""}>${u}바이트 (NEIS 기준)${data.상한바이트 ? ` · 상한 ${data.상한바이트}` : ""}${data.상한바이트 ? ` · ${over ? `${u - data.상한바이트}바이트 넘었습니다` : `남은 ${data.상한바이트 - u}바이트`}` : ""}</span>
+            ${hits.length ? `<span class="hits"> · 금지 낱말이 있습니다 — ${hits.map(esc).join(", ")}</span>` : ""}
+            ${changed ? `<span> · 수정됨</span>` : ""}
+          </div>
+          <div class="review-memo">
+            <label for="memo-${idx}">왜 고쳤는지 한 줄 (선택)</label>
+            <input id="memo-${idx}" data-i="${idx}" data-role="memo" value="${esc(s.검수메모)}">
+          </div>
+          <div class="btnrow">
+            <button type="button" class="btn primary" data-role="done-next" data-i="${idx}">마치고 다음 <small>⌃⏎</small></button>
+          </div>
+        </div>
+      </div>
+    </div>`;
   }
 
-  function progress() {
-    const done = data.students.filter(s => s.검수완료).length;
-    const changed = data.students.filter(s => original.get(keyOf(s))?.세특 !== s.세특).length;
-    document.getElementById("rv-prog").innerHTML =
-      `검수 <b>${done}</b>/${data.students.length} · 수정 <b>${changed}</b>건`;
+  function renderList() {
+    const flagged = data.students.filter(s => s.우선검토?.length);
+    const rest = data.students.filter(s => !s.우선검토?.length);
+    let html = "";
+    if (flagged.length) {
+      html += `<h3 class="review-group-title">먼저 볼 ${flagged.length}명</h3><hr class="rule">
+        <ul class="review-list" data-group="flagged">${flagged.map(s => rowHtml(s, data.students.indexOf(s))).join("")}</ul>`;
+    }
+    html += `<h3 class="review-group-title">나머지 ${rest.length}명</h3><hr class="rule">
+      <ul class="review-list" data-group="rest">${rest.map(s => rowHtml(s, data.students.indexOf(s))).join("")}</ul>`;
+    const body = document.getElementById("review-body");
+    body.innerHTML = html;
+
+    body.querySelectorAll("li.row").forEach(li => {
+      li.addEventListener("click", e => {
+        if (e.target.closest("textarea, input, button")) return;
+        toggleExpand(Number(li.dataset.i));
+      });
+      li.addEventListener("keydown", e => {
+        if (e.target !== li) return;
+        if (e.key === "Enter") { e.preventDefault(); toggleExpand(Number(li.dataset.i)); }
+      });
+    });
+    body.querySelectorAll("[data-role=seteuk]").forEach(ta => {
+      let t = null;
+      ta.addEventListener("input", e => {
+        const i = Number(e.target.dataset.i);
+        data.students[i].세특 = e.target.value;
+        clearTimeout(t);
+        t = setTimeout(() => { renderHead(); updateMeta(i); }, 300);
+      });
+      ta.addEventListener("blur", e => {
+        const i = Number(e.target.dataset.i);
+        data.students[i].세특 = e.target.value;
+        renderHead(); updateMeta(i);
+      });
+      ta.addEventListener("keydown", e => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          finishAndNext(Number(e.target.dataset.i));
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          const li = e.target.closest("li.row");
+          if (li) li.focus();
+        }
+      });
+    });
+    body.querySelectorAll("[data-role=memo]").forEach(inp => {
+      inp.addEventListener("input", e => {
+        data.students[Number(e.target.dataset.i)].검수메모 = e.target.value;
+      });
+    });
+    body.querySelectorAll("[data-role=done-next]").forEach(btn => {
+      btn.addEventListener("click", e => finishAndNext(Number(e.target.dataset.i)));
+    });
+  }
+
+  function updateMeta(i) {
+    const li = document.querySelector(`li.row[data-i="${i}"]`);
+    if (!li) return;
+    const metaEl = li.querySelector(".review-meta");
+    if (!metaEl) return;
+    const s = data.students[i];
+    const u = B2(s.세특);
+    const over = data.상한바이트 && u > data.상한바이트;
+    const hits = bannedHits(s.세특);
+    const changed = original.get(keyOf(s))?.세특 !== s.세특;
+    metaEl.innerHTML =
+      `<span${over ? ' class="over"' : ""}>${u}바이트 (NEIS 기준)${data.상한바이트 ? ` · 상한 ${data.상한바이트}` : ""}${data.상한바이트 ? ` · ${over ? `${u - data.상한바이트}바이트 넘었습니다` : `남은 ${data.상한바이트 - u}바이트`}` : ""}</span>` +
+      (hits.length ? `<span class="hits"> · 금지 낱말이 있습니다 — ${hits.map(esc).join(", ")}</span>` : "") +
+      (changed ? `<span> · 수정됨</span>` : "");
+  }
+
+  function toggleExpand(i) {
+    const s = data.students[i];
+    const key = keyOf(s);
+    expandedKey = (expandedKey === key) ? null : key;
+    renderList();
+    const li = document.querySelector(`li.row[data-i="${i}"]`);
+    if (li) li.focus();
+  }
+
+  function finishAndNext(i) {
+    const s = data.students[i];
+    s.검수완료 = true;
+    const flagged = data.students.filter(x => x.우선검토?.length);
+    const rest = data.students.filter(x => !x.우선검토?.length);
+    const wasFlagged = s.우선검토?.length > 0;
+    const pool = wasFlagged ? flagged : rest;
+    const posInPool = pool.indexOf(s);
+    const next = pool[posInPool + 1] || (wasFlagged ? rest[0] : null);
+    expandedKey = null;
+    renderHead();
+    renderList();
+    if (next) {
+      const idx = data.students.indexOf(next);
+      const li = document.querySelector(`li.row[data-i="${idx}"]`);
+      if (li) li.focus();
+    }
   }
 
   /**
@@ -689,64 +1440,97 @@ const REVIEW = (() => {
     };
   }
 
+  function renderSaveSection() {
+    const box = document.getElementById("review-save-body");
+    const notDone = data.students.filter(s => !s.검수완료).length;
+    box.innerHTML = `
+      ${notDone ? `<p class="measure">검수 완료 표시가 없는 학생이 ${notDone}명 있습니다.</p>
+        <div class="btnrow">
+          <button type="button" class="btn" id="rv-anyway">그래도 저장</button>
+          <button type="button" class="btn" id="rv-goto">${notDone}명 보러 가기</button>
+        </div>` : ""}
+      <div class="btnrow"><button type="button" class="btn primary" id="rv-save-ai">AI에게 줄 파일 저장</button></div>
+      <p id="rv-save-ai-result" aria-live="polite"></p>
+      <div class="btnrow"><button type="button" class="btn" id="rv-save-local" disabled>실명 검수본도 저장</button></div>
+      <p id="rv-save-local-result" aria-live="polite"></p>
+    `;
+
+    const gotoBtn = document.getElementById("rv-goto");
+    if (gotoBtn) gotoBtn.addEventListener("click", () => {
+      const first = data.students.find(s => !s.검수완료);
+      if (!first) return;
+      const idx = data.students.indexOf(first);
+      expandedKey = keyOf(first);
+      renderList();
+      const li = document.querySelector(`li.row[data-i="${idx}"]`);
+      if (li) li.focus();
+    });
+
+    document.getElementById("rv-save-ai").addEventListener("click", async () => {
+      const { diff } = buildOutputs();
+      window.__reviewOutputs = buildOutputs();
+      const where = await saveFile("검수diff(AI용).json", diff);
+      if (where === null) { document.getElementById("rv-save-ai-result").textContent = "저장을 취소했습니다."; return; }
+      document.getElementById("rv-save-ai-result").textContent =
+        `검수diff(AI용).json을 내려받았습니다 — 수정 ${diff.변경.length}건. 대화창에는 이 파일만 주세요.`;
+      document.getElementById("rb-ai-body").innerHTML =
+        `<p class="filename">검수diff(AI용).json</p>
+         <p class="meta">수정 ${diff.변경.length}건 · 이름·학번 없음</p>
+         <p class="meta">내려받기 폴더 확인</p>
+         <p>이 파일을 대화창에 주세요.</p>`;
+      document.getElementById("rv-save-local").disabled = false;
+    });
+
+    document.getElementById("rv-save-local").addEventListener("click", async () => {
+      const { 검수본 } = buildOutputs();
+      const where = await saveFile("검수본(실명·보관용).json", 검수본);
+      if (where === null) { document.getElementById("rv-save-local-result").textContent = "저장을 취소했습니다."; return; }
+      document.getElementById("rv-save-local-result").textContent =
+        `검수본(실명·보관용).json을 내려받았습니다. 방금 받은 두 파일 중 이름에 (실명·보관용)이 붙은 쪽이 더 최근입니다. 대화창에 넣을 것은 (AI용)이 붙은 쪽입니다.`;
+    });
+
+    const anywayBtn = document.getElementById("rv-anyway");
+    if (anywayBtn) anywayBtn.addEventListener("click", () => {
+      document.getElementById("rv-save-ai").focus();
+    });
+  }
+
   document.getElementById("rv-load").addEventListener("change", async e => {
     const f = e.target.files[0];
     if (!f) return;
     try { load(JSON.parse(await f.text())); }
-    catch (err) { alert("검수번들.json을 읽지 못했습니다: " + err.message); }
-  });
-
-  document.getElementById("rv-list").addEventListener("input", e => {
-    const i = e.target.dataset.i;
-    if (i === undefined) return;
-    const s = data.students[i];
-    if (e.target.tagName === "TEXTAREA") { s.세특 = e.target.value; meta(i); progress(); }
-    else if (e.target.classList.contains("memo")) { s.검수메모 = e.target.value; }
-  });
-
-  document.getElementById("rv-list").addEventListener("change", e => {
-    const i = e.target.dataset.i;
-    if (i === undefined || e.target.type !== "checkbox") return;
-    data.students[i].검수완료 = e.target.checked;
-    e.target.closest(".card").classList.toggle("done", e.target.checked);
-    progress();
-  });
-
-  document.getElementById("rv-onlyflag").addEventListener("click", () => {
-    onlyFlag = !onlyFlag;
-    document.getElementById("rv-onlyflag").textContent = onlyFlag ? "전체 보기" : "우선 검토만";
-    render();
-  });
-
-  document.getElementById("rv-save").addEventListener("click", async () => {
-    const notDone = data.students.filter(s => !s.검수완료).length;
-    if (notDone && !confirm(`검수 완료 표시가 없는 학생이 ${notDone}명 있습니다. 그래도 저장할까요?`)) return;
-
-    const { 검수본, diff } = buildOutputs();
-    const btn = document.getElementById("rv-save");
-    const saved = document.getElementById("rv-saved");
-    btn.disabled = true;
-    let where = null;
-    try {
-      where = await saveFile("검수본.json", 검수본);
-      if (where === null) { saved.textContent = "저장 취소"; return; }
-      const w2 = await saveFile("검수diff.json", diff);
-      if (w2 === null) { saved.textContent = "diff 저장 취소"; return; }
-    } finally { btn.disabled = false; }
-
-    saved.textContent =
-      `저장함(${where}) — 수정 ${diff.변경.length}건. AI에게는 검수diff.json만 주세요.`;
+    catch (err) {
+      document.getElementById("review-empty").hidden = false;
+      const p = document.createElement("p");
+      p.className = "measure";
+      p.textContent = `검수번들.json을 읽지 못했습니다. 대화에서 만든 파일이 맞는지 확인해 주세요. (${err.message})`;
+      document.getElementById("review-empty").appendChild(p);
+    }
   });
 
   return { load, buildOutputs, bannedHits, getData: () => data };
 })();
 
-window.addEventListener("beforeunload", e => {
-  const d = REVIEW.getData();
-  const dirty = ROSTER.state.students.length > 0 ||
-                (d && d.students.some(s => s.세특 !== undefined && s.검수메모));
-  if (dirty) { e.preventDefault(); e.returnValue = ""; }
-});
+/* ═════════════════════════ 색인 현재 위치 (IntersectionObserver) ═════════════════════════ */
+(() => {
+  const links = document.querySelectorAll('nav.toc a[data-toc]');
+  if (!links.length || !("IntersectionObserver" in window)) return;
+  const map = new Map([...links].map(a => [a.dataset.toc, a]));
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(en => {
+      const a = map.get(en.target.id);
+      if (!a) return;
+      if (en.isIntersecting) {
+        links.forEach(l => l.removeAttribute("aria-current"));
+        a.setAttribute("aria-current", "true");
+      }
+    });
+  }, { rootMargin: "-40% 0px -50% 0px" });
+  map.forEach((_, id) => {
+    const el = document.getElementById(id);
+    if (el) io.observe(el);
+  });
+})();
 
 window.TOOLS = { ROSTER, REVIEW, U8, B2, splitRows, esc };
 </script>
