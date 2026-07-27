@@ -1307,14 +1307,39 @@ const REVIEW = (() => {
     const body = document.getElementById("review-body");
     body.innerHTML = html;
 
-    body.querySelectorAll("li.row").forEach(li => {
+    // roving tabindex — Tab 한 번으로 목록에 들어오고, 그 안에서는 방향키로 옮긴다.
+    // 전부 tabindex="-1"이면 키보드로는 목록에 아예 들어올 수 없다.
+    const rows = [...body.querySelectorAll("li.row")];
+    const setCurrent = (pos, focus) => {
+      if (!rows.length) return;
+      const p = Math.max(0, Math.min(rows.length - 1, pos));
+      rows.forEach((r, k) => { r.tabIndex = k === p ? 0 : -1; });
+      if (focus) rows[p].focus();
+    };
+    const openPos = rows.findIndex(r => r.getAttribute("aria-expanded") === "true");
+    setCurrent(openPos >= 0 ? openPos : 0, false);
+
+    body.querySelectorAll("li.row").forEach((li, pos) => {
       li.addEventListener("click", e => {
         if (e.target.closest("textarea, input, button")) return;
         toggleExpand(Number(li.dataset.i));
       });
       li.addEventListener("keydown", e => {
         if (e.target !== li) return;
-        if (e.key === "Enter") { e.preventDefault(); toggleExpand(Number(li.dataset.i)); }
+        // 두 무리(먼저 볼 / 나머지)를 한 줄로 이어서 옮긴다.
+        switch (e.key) {
+          case "ArrowDown": case "j": e.preventDefault(); setCurrent(pos + 1, true); return;
+          case "ArrowUp":   case "k": e.preventDefault(); setCurrent(pos - 1, true); return;
+          case "Home": e.preventDefault(); setCurrent(0, true); return;
+          case "End":  e.preventDefault(); setCurrent(rows.length - 1, true); return;
+          case "Escape":
+            if (li.getAttribute("aria-expanded") === "true") {
+              e.preventDefault(); toggleExpand(Number(li.dataset.i));
+            }
+            return;
+          case "Enter": case " ":
+            e.preventDefault(); toggleExpand(Number(li.dataset.i)); return;
+        }
       });
     });
     body.querySelectorAll("[data-role=seteuk]").forEach(ta => {
@@ -1368,13 +1393,21 @@ const REVIEW = (() => {
       (changed ? `<span> · 수정됨</span>` : "");
   }
 
+  /** 지정한 학생 행에 포커스를 주고 roving 상태(tabindex 0)도 그 행으로 옮긴다. */
+  function focusRow(i) {
+    const li = document.querySelector(`li.row[data-i="${i}"]`);
+    if (!li) return;
+    document.querySelectorAll("#review-body li.row").forEach(r => { r.tabIndex = -1; });
+    li.tabIndex = 0;
+    li.focus();
+  }
+
   function toggleExpand(i) {
     const s = data.students[i];
     const key = keyOf(s);
     expandedKey = (expandedKey === key) ? null : key;
     renderList();
-    const li = document.querySelector(`li.row[data-i="${i}"]`);
-    if (li) li.focus();
+    focusRow(i);
   }
 
   function finishAndNext(i) {
@@ -1389,11 +1422,7 @@ const REVIEW = (() => {
     expandedKey = null;
     renderHead();
     renderList();
-    if (next) {
-      const idx = data.students.indexOf(next);
-      const li = document.querySelector(`li.row[data-i="${idx}"]`);
-      if (li) li.focus();
-    }
+    if (next) focusRow(data.students.indexOf(next));
   }
 
   /**
