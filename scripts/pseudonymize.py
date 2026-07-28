@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import sys
 from pathlib import Path
 
 STUDENT_ID = re.compile(r"\b\d{5}\b")
@@ -412,6 +413,16 @@ def detect_roster(path) -> dict:
             sheets = []
             읽기오류 = f"{type(exc).__name__}: {exc}"
 
+    return _roster_from_sheets(sheets, str(path), 읽기오류)
+
+
+def _roster_from_sheets(sheets, 출처: str, 읽기오류: str = "") -> dict:
+    """(시트명, 행 목록) 쌍의 목록에서 명렬 결과를 조립한다.
+
+    detect_roster(파일)와 클립보드 경로가 같은 판정 로직을 공유하기 위한
+    공용 몸통이다 — 입력원만 다르고 헤더/패턴 판정·시트 병합·확인사유는
+    한 곳에서만 유지한다.
+    """
     per_sheet = [(name, _detect_from_rows(rows)) for name, rows in sheets]
     data_sheets = [(name, r) for name, r in per_sheet if r["students"]]
 
@@ -447,7 +458,7 @@ def detect_roster(path) -> dict:
             확인사유 = ["표 헤더를 찾지 못해 패턴으로 추정했습니다."]
 
     result = {
-        "students": students, "출처": str(path), "방식": 방식,
+        "students": students, "출처": 출처, "방식": 방식,
         "확인필요": bool(확인사유), "확인사유": 확인사유,
         "건너뜀": skipped, "상태표기건너뜀": status_skipped, "중복": duplicate,
     }
@@ -1452,9 +1463,12 @@ MAPPING_GLOB = "매핑*.json"
 
 # 가명처리 파이프라인이 로컬에 남기는 모든 중간 산출물. 명렬(전체 학급 실명
 # 원장)도 매핑표와 마찬가지로 무기한 평문으로 남으면 안 되므로 파기·잔존
-# 감지 대상에 포함한다.
+# 감지 대상에 포함한다. 확인*.html(confirm-html 산출)·검수*.html(검수 화면
+# 산출)은 실명을 담은 보기용 파일이라 같은 그물에 넣는다 — 스킬 폴더의
+# 템플릿(tools/*.html)은 활동 폴더 밖이므로 이 글롭에 걸리지 않는다.
 SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수*.json",
-                   "토큰본*.json", "제출자*.json", "검수번들*.json", "검수본*.json")
+                   "토큰본*.json", "제출자*.json", "검수번들*.json", "검수본*.json",
+                   "확인*.html", "검수*.html")
 
 
 def save_mapping(mapping: dict, path) -> None:
@@ -1508,6 +1522,292 @@ def destroy_artifacts(dir_path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 잠금 파일 감지 — 엑셀은 파일을 여는 동안 같은 폴더에 "~$파일명" 잠금 파일을
+# 만든다. 잠금이 보이면 교사가 아직 저장하지 않은 옛 저장본을 읽을 위험이
+# 있으므로 경고 한 줄을 내되, 차단하지는 않는다(읽기 자체는 가능하다).
+# ---------------------------------------------------------------------------
+
+LOCK_WARNING = "이 파일이 엑셀에 열려 있습니다. 저장하셨는지 확인해 주세요."
+
+
+def _warn_if_excel_lock(path) -> None:
+    path = Path(path)
+    try:
+        if path.with_name("~$" + path.name).exists():
+            print(LOCK_WARNING)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# 구조 지문 — "어느 파일·버전이 진본인가"는 CLI fail-closed가 작동하지 않는
+# 유일한 계층이다(백업본 오선택·작년 파일·미저장 엑셀). 확정한 파일명과 구조
+# (시트명 목록·헤더행 해시·인원수)를 활동프로파일에 기록해 두고, 다음 실행에서
+# 대조해 불일치면 멈춘다. 지문에는 실명·학번이 절대 들어가지 않는다 — 헤더
+# 행(열 이름)만 해시하고, 나머지는 집계값이다.
+# ---------------------------------------------------------------------------
+
+def _structure_fingerprint(path, roster: dict) -> dict:
+    """명단 파일의 구조 지문을 만든다: 시트명 목록·헤더행 해시·인원수."""
+    import hashlib
+
+    path = Path(path)
+    시트명: list[str] = []
+    header_lines: list[str] = []
+    if path.suffix.lower() == ".xlsx":
+        sheet_list = _sheets_from_xlsx(path)
+    else:
+        sheet_list = [("", _rows_from_text(path))]
+    for name, rows in sheet_list:
+        시트명.append(name)
+        _, _, _, header_row_idx = _find_header_indices(rows)
+        if 0 <= header_row_idx < len(rows):
+            header_lines.append("\t".join(rows[header_row_idx]))
+    digest = hashlib.sha256("\n".join(header_lines).encode("utf-8")).hexdigest()[:16]
+    return {
+        "시트명": 시트명,
+        "헤더행해시": digest,
+        "인원수": len(roster.get("students", [])),
+    }
+
+
+def _fingerprint_diffs(profile: dict, file_name: str, fingerprint: dict) -> list[str]:
+    """기록된 지문과 이번 실행을 대조해 사람이 읽을 차이 목록을 만든다.
+
+    빈 목록이면 일치. 파일명·학생 이름이 아닌 시트명은 출력해도 되고,
+    인원수는 집계값이라 안전하다.
+    """
+    recorded = profile.get("구조지문")
+    if not isinstance(recorded, dict):
+        return []
+    diffs: list[str] = []
+    old_file = profile.get("명단파일")
+    if old_file and old_file != file_name:
+        diffs.append(f"명단 파일이 지난번과 다릅니다: {old_file} → {file_name}.")
+    old_n = recorded.get("인원수")
+    new_n = fingerprint["인원수"]
+    if old_n is not None and old_n != new_n:
+        diffs.append(f"인원수가 {old_n}명→{new_n}명으로 달라졌습니다.")
+    old_sheets = recorded.get("시트명")
+    if old_sheets is not None and list(old_sheets) != fingerprint["시트명"]:
+        diffs.append(
+            "시트 구성이 달라졌습니다: "
+            f"{', '.join(old_sheets) or '(없음)'} → {', '.join(fingerprint['시트명']) or '(없음)'}."
+        )
+    if recorded.get("헤더행해시") and recorded["헤더행해시"] != fingerprint["헤더행해시"]:
+        diffs.append("표의 머리글(열 구성)이 지난번과 다릅니다.")
+    return diffs
+
+
+# ---------------------------------------------------------------------------
+# 클립보드 리더 — 비상구 전용. 종이 사진·스캔처럼 파일로 만들 수 없는 원본에서만
+# 쓴다(기본 경로는 언제나 파일이다). tkinter는 쓰지 않는다 — 탐색기에서 파일을
+# 복사한 클립보드(CF_HDROP)를 파일 경로 문자열로 돌려줘 "1행 인식"이라는 조용한
+# 실패를 만든다. ctypes CF_UNICODETEXT는 그때 정직하게 NO_TEXT로 실패한다.
+# 읽은 직후 클립보드를 비운다 — 실명 표가 클립보드에 남아 Win+V 히스토리나
+# 대화창 Ctrl+V로 흘러가는 시간을 줄이기 위해서다.
+# ---------------------------------------------------------------------------
+
+def _read_clipboard_windows():
+    import ctypes
+    import time
+
+    CF_UNICODETEXT = 13
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    # 64비트 Windows에서 반환형을 지정하지 않으면 핸들·포인터가 32비트로
+    # 잘려(기본 restype=c_int) GlobalLock이 엉뚱한 주소를 받는다 — 실측에서
+    # access violation으로 재현됐다. 반드시 c_void_p로 선언한다.
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
+    opened = False
+    for _ in range(10):
+        if user32.OpenClipboard(None):
+            opened = True
+            break
+        # 엑셀이 다중 선택을 클립보드에 쓰는 직후에는 점유 경합이 실제로
+        # 일어난다(실측 재시도 1회 발생) — 재시도 없이 만들면 간헐적으로
+        # "비었다"는 거짓 응답이 나온다.
+        time.sleep(0.05)
+    if not opened:
+        return ("BUSY", None)
+    try:
+        if not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+            return ("NO_TEXT", None)
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return ("NO_TEXT", None)
+        ptr = kernel32.GlobalLock(ctypes.c_void_p(handle))
+        if not ptr:
+            return ("NO_TEXT", None)
+        try:
+            text = ctypes.wstring_at(ptr)
+        finally:
+            kernel32.GlobalUnlock(ctypes.c_void_p(handle))
+        # 읽은 직후, 같은 OpenClipboard 안에서 비운다.
+        user32.EmptyClipboard()
+        return ("OK", text)
+    finally:
+        user32.CloseClipboard()
+
+
+def _read_clipboard_macos():
+    import subprocess as sp
+
+    try:
+        proc = sp.run(["pbpaste"], capture_output=True, timeout=10)
+    except (OSError, sp.TimeoutExpired):
+        return ("UNSUPPORTED", None)
+    text = proc.stdout.decode("utf-8", errors="replace")
+    if not text.strip():
+        return ("NO_TEXT", None)
+    try:
+        sp.run(["pbcopy"], input=b"", timeout=10)  # 읽은 직후 비운다
+    except (OSError, sp.TimeoutExpired):
+        pass
+    return ("OK", text)
+
+
+def _read_clipboard_text():
+    """(상태, 본문)을 돌려준다. 상태: OK | NO_TEXT | BUSY | UNSUPPORTED.
+
+    OK일 때는 이미 클립보드를 비운 뒤다.
+    """
+    if sys.platform == "win32":
+        return _read_clipboard_windows()
+    if sys.platform == "darwin":
+        return _read_clipboard_macos()
+    return ("UNSUPPORTED", None)
+
+
+_COMMA_NUMBER = re.compile(r"\d{1,3}(,\d{3})+")
+
+
+def _normalize_clipboard_cell(cell: str) -> str:
+    """엑셀이 표시 문자열 그대로 보내는 결함을 걷어낸다.
+
+    - 셀 안 줄바꿈(Alt+Enter)은 큰따옴표 + 생 개행으로 온다 — 개행을 제거해
+      한 학생이 한 행으로 남게 한다.
+    - 숫자 서식(#,##0)이 섞이면 학번이 '30,101'로 온다 — 쉼표 구분 숫자면
+      쉼표를 걷어낸다(이름 등 일반 텍스트는 건드리지 않는다).
+    """
+    cell = re.sub(r"[\r\n]+", "", cell or "").strip()
+    if _COMMA_NUMBER.fullmatch(cell):
+        return cell.replace(",", "")
+    return cell
+
+
+def _rows_from_clipboard_text(text: str) -> list:
+    """클립보드 본문(셀=탭, 행=CRLF)을 행 목록으로 만든다.
+
+    생 split("\\n") 금지 — 셀 안 줄바꿈이 인용된 입력에서 한 학생이 두 행이
+    된다. csv.reader가 큰따옴표 규칙까지 정확히 처리한다.
+    """
+    import csv
+    import io
+
+    rows = []
+    for record in csv.reader(io.StringIO(text), delimiter="\t"):
+        cells = [_normalize_clipboard_cell(c) for c in record]
+        if any(cells):
+            rows.append(cells)
+    return rows
+
+
+def _clipboard_streak_path(out_path) -> Path:
+    """연속 빈 클립보드 횟수를 기억하는 표시 파일 경로(산출 폴더 옆, 내용 없음)."""
+    return Path(out_path).resolve().parent / ".클립보드빈횟수"
+
+
+def _report_clipboard_failure(status: str, out_path, what: str) -> None:
+    """빈/점유 클립보드를 사람이 읽을 문장으로 알린다. 2회 연속 비면 재시도
+    루프 대신 학교 보안 프로그램 가능성을 안내한다(입력방식-결론 §4)."""
+    if status == "BUSY":
+        print("다른 프로그램이 클립보드를 쓰고 있어 읽지 못했습니다. 잠시 후 다시 복사해 주세요.")
+        return
+    if status == "UNSUPPORTED":
+        print("이 환경에서는 클립보드를 읽을 수 없습니다. 파일로 저장해서 다시 시도해 주세요.")
+        return
+    marker = _clipboard_streak_path(out_path)
+    print(f"클립보드에 표가 보이지 않습니다. 엑셀에서 {what} 열을 긁어 Ctrl+C 하신 뒤 다시 말씀해 주세요.")
+    if marker.exists():
+        print(
+            "두 번 연속 비어 있습니다 — 학교 보안 프로그램일 수 있습니다. "
+            "이 경우 클립보드 대신 파일 저장 경로를 사용해 주세요."
+        )
+    else:
+        try:
+            marker.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _clear_clipboard_streak(out_path) -> None:
+    marker = _clipboard_streak_path(out_path)
+    try:
+        if marker.exists():
+            marker.unlink()
+    except OSError:
+        pass
+
+
+def _score_pairs_from_clipboard_rows(rows):
+    """클립보드 표에서 (학번, 점수) 쌍을 뽑는다.
+
+    학번 열은 다섯 자리 숫자가 가장 많이 나오는 열로 정한다. 점수 열은 남은
+    숫자 열이 정확히 하나일 때만 자동 채택한다 — 엑셀은 Ctrl 비인접 선택을
+    외접 사각형으로 펴서 고르지 않은 열까지 딸려 보내므로(실측), 숫자 열이
+    여럿이면 조용히 하나를 고르지 않고 멈춰야 한다.
+
+    반환: ("ok", pairs, no_score) | ("no_id",) | ("no_score_col",)
+          | ("ambiguous", 숫자열개수)
+    """
+    if not rows:
+        return ("no_id",)
+    width = max(len(r) for r in rows)
+
+    def cell(row, j):
+        return row[j] if j < len(row) else ""
+
+    id_counts = [sum(1 for r in rows if STUDENT_ID.fullmatch(cell(r, j))) for j in range(width)]
+    best = max(id_counts) if id_counts else 0
+    if best == 0:
+        return ("no_id",)
+    id_col = id_counts.index(best)
+
+    data_rows = [r for r in rows if STUDENT_ID.fullmatch(cell(r, id_col))]
+    numeric_cols = []
+    for j in range(width):
+        if j == id_col:
+            continue
+        if any(_parse_number(cell(r, j)) is not None for r in data_rows):
+            numeric_cols.append(j)
+    if not numeric_cols:
+        return ("no_score_col",)
+    if len(numeric_cols) > 1:
+        return ("ambiguous", len(numeric_cols))
+
+    score_col = numeric_cols[0]
+    pairs = []
+    no_score = 0
+    seen = set()
+    for r in data_rows:
+        sid = cell(r, id_col)
+        if sid in seen:
+            continue
+        seen.add(sid)
+        score = _parse_number(cell(r, score_col))
+        if score is None:
+            no_score += 1
+            continue
+        pairs.append((sid, score))
+    return ("ok", pairs, no_score)
+
+
+# ---------------------------------------------------------------------------
 # CLI — 명렬(실명·학번)이 LLM 컨텍스트로 들어가지 않도록, 에이전트는 이 CLI를
 # subprocess로 실행하고 stdout의 요약(인원수·건수)만 읽는다.
 # stdout/stderr에는 이름·학번을 절대 출력하지 않는다 — 이 계약이 기능의 전부다.
@@ -1525,8 +1825,71 @@ def _write_json(obj, path) -> None:
         json.dump(obj, f, ensure_ascii=False, indent=1)
 
 
+def _apply_roster_profile(input_path, profile_path, roster) -> int:
+    """활동프로파일에 명단 파일·구조 지문을 기록하고, 기록이 있으면 대조한다.
+
+    불일치면 exit 1 — 명렬.json을 새로 쓰기 전에 호출해야 낡은 지문과 다른
+    명단이 조용히 하류로 흐르지 않는다(fail-closed). 프로파일의 다른 키
+    (활동명·목표바이트 등)는 그대로 보존한다.
+    """
+    profile_path = Path(profile_path)
+    profile: dict = {}
+    if profile_path.exists():
+        try:
+            loaded = _read_json(profile_path)
+        except (OSError, ValueError):
+            print("활동프로파일을 읽지 못해 구조 지문을 대조할 수 없습니다. 파일이 온전한지 확인해 주세요.")
+            return 1
+        if isinstance(loaded, dict):
+            profile = loaded
+
+    file_name = Path(input_path).name
+    fingerprint = _structure_fingerprint(input_path, roster)
+    diffs = _fingerprint_diffs(profile, file_name, fingerprint)
+    if diffs:
+        print("중단: 지난번에 확정한 명단 파일과 다릅니다.")
+        for diff in diffs:
+            print(f"  - {diff}")
+        print(
+            "일부러 바꾸신 것이면(전입·전출, 파일 교체 등) 활동프로파일의 '구조지문'을 "
+            "지운 뒤 다시 실행해 주세요."
+        )
+        return 1
+
+    first_time = "구조지문" not in profile
+    profile["명단파일"] = file_name
+    profile["구조지문"] = fingerprint
+    _write_json(profile, profile_path)
+    if first_time:
+        print("활동프로파일에 명단 파일과 구조 지문을 기록했습니다. 다음부터는 자동으로 대조합니다.")
+    else:
+        print("지난번과 같은 명단 파일·구조입니다(구조 지문 일치).")
+    return 0
+
+
 def _cmd_roster(args) -> int:
-    roster = detect_roster(args.input)
+    clipboard = getattr(args, "clipboard", False)
+    if clipboard and args.input:
+        print("--clipboard와 파일 경로는 함께 쓸 수 없습니다. 하나만 지정해 주세요.")
+        return 1
+    if clipboard and args.profile:
+        print("--clipboard는 --profile과 함께 쓸 수 없습니다(클립보드 입력에는 대조할 파일 지문이 없습니다).")
+        return 1
+    if not clipboard and not args.input:
+        print("명단 파일 경로를 지정하거나 --clipboard 로 클립보드 입력(비상구)을 사용해 주세요.")
+        return 1
+
+    if clipboard:
+        status, text = _read_clipboard_text()
+        if status != "OK" or not (text or "").strip():
+            _report_clipboard_failure("NO_TEXT" if status == "OK" else status, args.out, "학번·이름 두")
+            return 1
+        _clear_clipboard_streak(args.out)
+        roster = _roster_from_sheets([("", _rows_from_clipboard_text(text))], "클립보드")
+    else:
+        _warn_if_excel_lock(args.input)
+        roster = detect_roster(args.input)
+
     n = len(roster.get("students", []))
     if n == 0:
         읽기오류 = roster.get("읽기오류")
@@ -1537,6 +1900,12 @@ def _cmd_roster(args) -> int:
             print("명렬 인식: 0명. 학번·이름 두 열이 있는 표(엑셀) 또는 '학번 이름' 형식의 "
                   "텍스트로 다시 붙여넣어 주세요.")
         return 1
+
+    if args.profile:
+        rc = _apply_roster_profile(args.input, args.profile, roster)
+        if rc != 0:
+            return rc
+
     _write_json(roster, args.out)
     print(f"명렬 인식: {n}명 (방식: {roster.get('방식', '?')}). 이름은 출력하지 않습니다.")
     시트합침 = roster.get("시트합침")
@@ -1793,6 +2162,17 @@ def _cmd_score(args) -> int:
     필요 없다. --column/--grade-column/--sum-columns/--sheet와는 함께 쓸 수 없다
     (열 해석·시트 병합은 애초에 xlsx 경로에서만 의미가 있는 개념이기 때문이다).
     """
+    clipboard = getattr(args, "clipboard", False)
+    if clipboard:
+        if any([args.input, args.paste, args.column, args.grade_column, args.sum_columns, args.sheet]):
+            print(
+                "--clipboard는 파일 경로나 --paste/--column/--grade-column/--sum-columns/"
+                "--sheet와 함께 쓸 수 없습니다."
+            )
+            return 1
+        mapping = _read_json(args.mapping)
+        return _cmd_score_clipboard(args, mapping)
+
     if args.paste:
         if any([args.column, args.grade_column, args.sum_columns, args.sheet]):
             print(
@@ -1817,6 +2197,8 @@ def _cmd_score(args) -> int:
     if input_path.suffix.lower() != ".xlsx":
         print("지원하지 않는 입력 형식입니다. xlsx 파일을 사용해 주세요.")
         return 1
+
+    _warn_if_excel_lock(input_path)
 
     if _xlsx_is_empty(input_path):
         print("채점표 파일이 비어 있습니다.")
@@ -1881,6 +2263,65 @@ def _cmd_score(args) -> int:
 
     print(
         f"점수 수집: {len(out_items)}명(열: {column_ref}). 분포 — {dist_str}. "
+        f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+    )
+    return 0
+
+
+def _cmd_score_clipboard(args, mapping) -> int:
+    """--clipboard: 비상구 전용 — 교사가 엑셀에서 긁어 복사한 학번·점수 표를
+    클립보드에서 한 번 읽고 바로 비운다. 파일로 만들 수 없는 원본에서만 쓴다.
+    """
+    status, text = _read_clipboard_text()
+    if status != "OK" or not (text or "").strip():
+        _report_clipboard_failure("NO_TEXT" if status == "OK" else status, args.out, "학번·점수 두")
+        return 1
+    _clear_clipboard_streak(args.out)
+
+    rows = _rows_from_clipboard_text(text)
+    result = _score_pairs_from_clipboard_rows(rows)
+    if result[0] == "no_id":
+        print("클립보드 표에서 학번 열을 찾지 못했습니다. 학번 열과 점수 열을 함께 긁어 다시 복사해 주세요.")
+        return 1
+    if result[0] == "no_score_col":
+        print("클립보드 표에서 점수로 보이는 숫자 열을 찾지 못했습니다. 학번·점수 두 열을 긁어 다시 복사해 주세요.")
+        return 1
+    if result[0] == "ambiguous":
+        print(
+            f"클립보드 표에 숫자 열이 {result[1]}개 있어 어느 열이 점수인지 정할 수 없습니다. "
+            "학번 열과 점수 열, 두 열만 긁어 다시 복사해 주세요."
+        )
+        return 1
+
+    _, pairs, no_score = result
+    out_items = []
+    excluded_unmapped = 0
+    for sid, score in pairs:
+        token = mapping.get("map", {}).get(str(sid))
+        if token is None:
+            excluded_unmapped += 1
+            continue
+        out_items.append({"토큰": token, "점수": _to_json_number(score)})
+
+    _write_json({"items": out_items}, args.out)
+
+    if not out_items:
+        print(
+            f"점수 수집: 0명(클립보드). "
+            f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
+        )
+        return 0
+
+    dist: dict = {}
+    for item in out_items:
+        dist[item["점수"]] = dist.get(item["점수"], 0) + 1
+    dist_str = ", ".join(
+        f"{_format_score_label(score)}점 {count}명"
+        for score, count in sorted(dist.items(), key=lambda kv: -kv[0])
+    )
+
+    print(
+        f"점수 수집: {len(out_items)}명(클립보드). 분포 — {dist_str}. "
         f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
     )
     return 0
@@ -2044,6 +2485,145 @@ def _cmd_score_sum(args, mapping, input_path) -> int:
         f"합산: {range_display}. 점수 수집: {len(out_items)}명. 분포 — {dist_str}. "
         f"제외: 매핑 없음 {excluded_unmapped}건, 점수 없음 {no_score}건."
     )
+    return 0
+
+
+def _cmd_detect(args) -> int:
+    """채점표 후보 탐지 — 폴더의 엑셀 파일을 수정시각순(최신 먼저)으로 나열한다.
+
+    파일명·수정시각·시트 수만 출력한다. 셀 내용(이름·학번)은 절대 열지도
+    출력하지도 않는다. 후보가 몇 개든 선택은 사람이 대화에서 한다 — 이 명령은
+    고르지 않는다(파일 오선택은 fail-closed가 작동하지 않는 유일한 계층이라
+    자동 선택이 곧 사고다).
+    """
+    from datetime import datetime
+
+    base = Path(args.dir)
+    if not base.is_dir():
+        print("폴더를 찾을 수 없습니다. --dir 경로를 확인해 주세요.")
+        return 1
+
+    candidates = []
+    for p in base.iterdir():
+        if not p.is_file():
+            continue
+        if p.name.startswith("~$"):  # 엑셀 잠금 파일은 채점표가 아니다
+            continue
+        if p.suffix.lower() in (".xlsx", ".xls"):
+            candidates.append(p)
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not candidates:
+        print("이 폴더에 채점표로 보이는 엑셀 파일이 보이지 않습니다. "
+              "채점표를 폴더에 넣고 다시 말씀해 주세요.")
+        return 1
+
+    def describe(p: Path) -> str:
+        mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        if p.suffix.lower() == ".xls" or _looks_like_legacy_xls(p):
+            note = "구형 .xls — 쓰려면 엑셀에서 .xlsx로 다시 저장해 주세요"
+        else:
+            try:
+                from openpyxl import load_workbook
+
+                wb = load_workbook(p, read_only=True)
+                note = f"시트 {len(wb.sheetnames)}개"
+                wb.close()
+            except Exception:
+                note = "시트 수 확인 불가"
+        return f"{p.name} (수정: {mtime}, {note})"
+
+    if len(candidates) == 1:
+        print(f"채점표 후보가 1개 있습니다: {describe(candidates[0])}")
+        return 0
+
+    print(f"채점표 후보가 {len(candidates)}개 있습니다. 어느 파일인지 알려 주세요.")
+    for i, p in enumerate(candidates, start=1):
+        print(f"  {i}. {describe(p)}")
+    return 0
+
+
+CONFIRM_HTML_NOTICE = (
+    "명단이 맞는지 훑어보세요. 이 파일은 보기용입니다 — 고칠 것이 있으면 대화창에 "
+    "말씀해 주세요(이름은 치지 마시고 '3번째 학생 이름이 달라요' 식으로)."
+)
+
+
+def _build_confirm_html(roster: dict, mapping: dict | None = None) -> str:
+    """읽기 전용 명단 확인 HTML을 만든다(순번·학번·이름, 매핑이 있으면 제출 여부).
+
+    가린 확인("김○○")만으로는 끝내 실명을 눈으로 대조하는 순간이 없다 — 그
+    역설을 이 화면 하나가 해소한다. JS 없음, 밝은 배경 단순 표. 실명을 담으므로
+    로컬 전용이고 SENSITIVE_GLOBS(확인*.html)로 파기된다.
+    """
+    import html as html_mod
+
+    token_map = mapping.get("map", {}) if mapping else None
+    header_cells = "<th>순번</th><th>학번</th><th>이름</th>"
+    if token_map is not None:
+        header_cells += "<th>제출 여부</th>"
+
+    body_rows = []
+    for i, s in enumerate(roster.get("students", []), start=1):
+        sid = str(s.get("학번", ""))
+        cells = [
+            f"<td>{i}</td>",
+            f"<td>{html_mod.escape(sid)}</td>",
+            f"<td>{html_mod.escape(str(s.get('이름', '')))}</td>",
+        ]
+        if token_map is not None:
+            cells.append(f"<td>{'제출' if sid in token_map else '미제출'}</td>")
+        body_rows.append("      <tr>" + "".join(cells) + "</tr>")
+
+    rows_html = "\n".join(body_rows)
+    return f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>명단 확인</title>
+<style>
+  body {{ background: #ffffff; color: #1a1a1a; font-family: "Malgun Gothic", sans-serif;
+         margin: 2rem auto; max-width: 40rem; padding: 0 1rem; }}
+  p.안내 {{ background: #f5f2ea; border: 1px solid #ddd6c7; padding: 0.8rem 1rem; }}
+  table {{ border-collapse: collapse; width: 100%; margin-top: 1rem; }}
+  th, td {{ border: 1px solid #d0d0d0; padding: 0.35rem 0.6rem; text-align: left; }}
+  th {{ background: #f0f0f0; }}
+</style>
+</head>
+<body>
+  <h1>명단 확인</h1>
+  <p class="안내">{CONFIRM_HTML_NOTICE}</p>
+  <table>
+    <thead><tr>{header_cells}</tr></thead>
+    <tbody>
+{rows_html}
+    </tbody>
+  </table>
+</body>
+</html>
+"""
+
+
+def _cmd_confirm_html(args) -> int:
+    import fnmatch
+
+    out = Path(args.out)
+    if not fnmatch.fnmatch(out.name, "확인*.html"):
+        # 실명 파일이 파기 그물 밖에 남는 것 자체가 사고다 — 이름을 강제한다.
+        print("확인 화면 파일명은 '확인'으로 시작하는 .html이어야 합니다(예: 확인.html). "
+              "그래야 destroy가 이 실명 파일을 함께 지웁니다.")
+        return 1
+
+    roster = _read_json(args.roster)
+    students = roster.get("students", [])
+    if not students:
+        print("명렬에 학생이 없습니다. roster부터 다시 실행해 주세요.")
+        return 1
+
+    mapping = _read_json(args.mapping) if args.mapping else None
+    out.write_text(_build_confirm_html(roster, mapping), encoding="utf-8")
+    print(f"확인 화면을 만들었습니다: {len(students)}명. 브라우저로 열어 훑어보기만 하면 됩니다. 저장: {args.out}")
+    print("주의: 이 파일은 실명을 담은 보기용 화면입니다 — 확인이 끝나면 destroy로 파기하세요.")
     return 0
 
 
@@ -2261,9 +2841,28 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_roster = sub.add_parser("roster", help="명렬 감지")
-    p_roster.add_argument("input", help="명단 원본 파일(xlsx 또는 텍스트)")
+    p_roster.add_argument(
+        "input", nargs="?",
+        help="명단 원본 파일(xlsx 또는 텍스트). --clipboard 사용 시에는 생략한다",
+    )
     p_roster.add_argument("--out", required=True, help="명렬.json 저장 경로")
+    p_roster.add_argument(
+        "--profile",
+        help="활동프로파일.json 경로. 성공 시 명단 파일명과 구조 지문(시트명 목록·"
+             "헤더행 해시·인원수)을 기록하고, 기록이 이미 있으면 대조해 불일치 시 "
+             "exit 1로 멈춘다(백업본 오선택·명단 변경 감지). 다른 키는 보존한다",
+    )
+    p_roster.add_argument(
+        "--clipboard", action="store_true",
+        help="비상구 전용 — 종이 사진·스캔처럼 파일로 만들 수 없는 원본일 때만 쓴다. "
+             "엑셀에서 학번·이름 두 열을 긁어 복사한 표를 클립보드에서 한 번 읽고 "
+             "바로 비운다. 파일이 있으면 언제나 파일 경로가 우선이다",
+    )
     p_roster.set_defaults(func=_cmd_roster)
+
+    p_detect = sub.add_parser("detect", help="채점표 후보 탐지(파일명·수정시각·시트 수만 출력)")
+    p_detect.add_argument("--dir", default=".", help="검사할 폴더(기본: 현재 폴더)")
+    p_detect.set_defaults(func=_cmd_detect)
 
     p_issue = sub.add_parser("issue", help="제출자 토큰 발급")
     p_issue.add_argument("--roster", required=True, help="명렬.json 경로")
@@ -2329,7 +2928,29 @@ def main(argv=None) -> int:
              "같을 때 자동으로 합쳐 진행한다(예: 반별로 나뉜 채점표). 학번이 겹치거나 시트마다 "
              "열의 의미가 다르면 exit 1로 멈춘 뒤 안내한다",
     )
+    p_score.add_argument(
+        "--clipboard", action="store_true",
+        help="비상구 전용 — 파일로 만들 수 없는 원본일 때만 쓴다. 엑셀에서 학번·점수 두 "
+             "열을 긁어 복사한 표를 클립보드에서 한 번 읽고 바로 비운다. 숫자 열이 여럿 "
+             "이면 조용히 고르지 않고 멈춘다. 다른 입력 옵션과 함께 쓸 수 없다",
+    )
     p_score.set_defaults(func=_cmd_score)
+
+    p_confirm = sub.add_parser(
+        "confirm-html",
+        help="읽기 전용 명단 확인 HTML 생성(실명 포함 — 로컬 전용, destroy 파기 대상)",
+    )
+    p_confirm.add_argument("--roster", required=True, help="명렬.json 경로")
+    p_confirm.add_argument(
+        "--mapping",
+        help="매핑.json 경로(선택). 있으면 학생별 제출 여부 열을 함께 표시한다",
+    )
+    p_confirm.add_argument(
+        "--out", required=True,
+        help="저장 경로. 파일명은 '확인'으로 시작하는 .html이어야 한다(예: 확인.html) — "
+             "파기(destroy) 그물에 걸리게 하기 위해서다",
+    )
+    p_confirm.set_defaults(func=_cmd_confirm_html)
 
     p_finalize = sub.add_parser("finalize", help="토큰 → 실명 재결합")
     p_finalize.add_argument("input", help='토큰 초안 JSON({"classes":[{"name","students":[{"토큰",...}]}]})')

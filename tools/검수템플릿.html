@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>세특 검수</title>
+<!--
+  세특 검수 화면 최종본 템플릿.
+  scripts/make_review_html.py 가 아래 "검수데이터" 블록의 플레이스홀더에
+  검수번들.json을 심어 검수.html 을 만든다. 생성된 파일에는 학생 실명이
+  들어가므로 활동 폴더에만 두고, 검수 후 파기 대상으로 다룬다.
+
+  골격은 V1 혼합 시안(좌 목록 / 우 원문·세특 대조, 채운 면 3층 구조)을,
+  짝 표기는 V4의 괄호 번호 문법(원문·세특 양쪽 같은 번호)을 가져왔다.
+  동작은 도구.html 의 REVIEW 로직(buildOutputs·bannedHits·U8·2단계 저장·
+  roving 키보드)을 이식했다. 바이트는 UTF-8 = NEIS 한 기준만 쓴다.
+
+  ── 대비 계산 (WCAG 2.x 상대휘도, 직접 계산) ──────────────────────────────
+  라이트: ink(#14181d)/surface(#ffffff) 17.82 · ink2/surface 8.59
+          ink3/sunken 5.38 · 주(#a3301f)/surface 7.00 · 주/주옅 5.96
+  다크:   ink(#e8ecf0)/surface(#171c22) 14.43 · ink2/surface 7.97
+          주(#f0907e)/surface 7.34
+  포커스 청 — 심사에서 채도 과다 판정(라이트 #1546c8 S81% · 다크 #93b4ff S100%)
+  → 채도 80% 미만으로 재조정:
+    라이트 --cheong #2d5aa8 : HSL 채도 57.7% · 대비 surface 6.69 · sunken 5.90
+    다크   --cheong #9db3d6 : HSL 채도 41.0% · 대비 surface 8.04 · sunken 8.61
+  → 글자 용도 4.5:1 이상, 테두리·포커스 링 용도 3:1 이상 전부 충족.
+  계기 띠(양 테마 공통 #12171d): bar-ink 15.63 · bar-ink2 7.18 · bar-주 8.10.
+-->
+<style>
+:root{
+  --field:#e3e7ec; --surface:#ffffff; --sunken:#eef1f4;
+  --ink:#14181d; --ink-2:#454d55; --ink-3:#5b636b;
+  --edge:#c8cfd6; --edge-strong:#848d96;
+  --ju:#a3301f; --ju-soft:#fbe9e5; --ju-ink:#ffffff;
+  /* 포커스·지금 고치는 칸 전용. 채도 57.7%(80% 미만), 대비는 파일 머리 주석 참조 */
+  --cheong:#2d5aa8;
+
+  /* 계기 띠는 테마와 무관하게 같은 색 */
+  --bar:#12171d; --bar-ink:#edeff2; --bar-ink-2:#9aa5af;
+  --bar-edge:#2e363e; --bar-ju:#f4948a;
+
+  --gothic:"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo",system-ui,sans-serif;
+  --serif:"Batang","바탕","AppleMyungjo","Nanum Myeongjo",serif;
+  --mono:Consolas,"D2Coding",ui-monospace,"Courier New",monospace;
+
+  --t-h2:1.375rem; --t-h3:1.125rem; --t-body:1.0625rem;
+  --t-ui:0.9375rem; --t-num:0.875rem; --t-meta:0.8125rem; --t-tick:0.6875rem;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    color-scheme: dark;
+    --field:#0a0d10; --surface:#171c22; --sunken:#10151a;
+    --ink:#e8ecf0; --ink-2:#a9b2ba; --ink-3:#8f99a2;
+    --edge:#333c45; --edge-strong:#6e7883;
+    --ju:#f0907e; --ju-soft:#351b16; --ju-ink:#14181d;
+    --cheong:#9db3d6;
+  }
+}
+
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0; background:var(--field); color:var(--ink);
+  font-family:var(--gothic); font-size:var(--t-ui); line-height:1.6;
+  word-break:keep-all; overflow-wrap:break-word;
+  font-variant-numeric:tabular-nums;
+  overflow-x:hidden;
+}
+h1,h2,h3,h4,p,ul,ol{margin:0;}
+ul{list-style:none; padding:0;}
+button{font:inherit; color:inherit;}
+.skip{position:absolute; left:-9999px; top:0; background:var(--surface); padding:var(--s2) var(--s4); z-index:99;}
+.skip:focus{left:var(--s4); top:var(--s2);}
+
+/* ── 상단 띠 — 평문 수치. 칩·다이얼 장식 없이 숫자와 문장만 ─────── */
+.rig{
+  position:sticky; top:0; z-index:60;
+  background:var(--bar); color:var(--bar-ink);
+  border-bottom:1px solid var(--bar-edge);
+  display:flex; align-items:center; flex-wrap:wrap; gap:var(--s2) var(--s4);
+  min-height:52px; padding:var(--s2) var(--s5);
+}
+.rig-id{display:flex; align-items:baseline; gap:var(--s3);}
+.rig-id b{font-size:var(--t-ui); font-weight:700; letter-spacing:-.01em; white-space:nowrap;}
+.rig-id span{font-size:var(--t-meta); color:var(--bar-ink-2);}
+.rig-counts{
+  font-family:var(--mono); font-size:var(--t-meta); color:var(--bar-ink);
+  border-left:1px solid var(--bar-edge); padding-left:var(--s4); white-space:nowrap;
+}
+.rig-chip{
+  background:transparent; color:var(--bar-ink);
+  border:1px solid var(--bar-edge); border-radius:2px;
+  padding:3px var(--s3); font-size:var(--t-meta); cursor:pointer; white-space:nowrap;
+}
+.rig-chip:hover{background:#1c232b;}
+.rig-priv{
+  margin-left:auto; font-size:var(--t-meta); line-height:1.4;
+  border-left:2px solid var(--bar-ju); padding-left:var(--s3);
+  color:var(--bar-ink); max-width:34rem;
+}
+
+/* ── 판 ─────────────────────────────────────────────────────── */
+.desk{max-width:1240px; margin:0 auto; padding:var(--s5) var(--s5) var(--s6);}
+.lede{margin-bottom:var(--s4); display:flex; flex-direction:column; gap:var(--s1);}
+.lede h1{font-size:var(--t-h2); font-weight:700; letter-spacing:-.015em;}
+.lede p{font-size:var(--t-meta); color:var(--ink-2); max-width:52rem; line-height:1.7;}
+
+.cols{display:grid; gap:var(--s4); align-items:start; grid-template-columns:346px minmax(0,1fr);}
+@media (max-width:1060px){ .cols{grid-template-columns:minmax(0,1fr);} }
+
+.panel{background:var(--surface); border:1px solid var(--edge); border-radius:2px;}
+.ph{
+  display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap;
+  background:var(--sunken); border-bottom:1px solid var(--edge);
+  padding:var(--s2) var(--s4); min-height:40px;
+}
+.ph h2{font-size:var(--t-ui); font-weight:700;}
+.ph .ph-meta{margin-left:auto; font-family:var(--mono); font-size:var(--t-meta); color:var(--ink-3);}
+
+/* ── 검수 목록 ──────────────────────────────────────────────── */
+.scroll{max-height:640px; overflow:auto;}
+.grp{
+  position:sticky; top:0; z-index:2;
+  background:var(--sunken); border-top:1px solid var(--edge); border-bottom:1px solid var(--edge-strong);
+  padding:6px var(--s3); display:flex; align-items:center; gap:var(--s2);
+}
+.grp b{font-size:var(--t-meta); font-weight:700;}
+.grp span{margin-left:auto; font-family:var(--mono); font-size:var(--t-tick); color:var(--ink-3);}
+.row{display:flex; align-items:stretch; border-bottom:1px solid var(--edge); cursor:pointer;}
+.row:hover{background:var(--sunken);}
+.gut{
+  flex:0 0 40px; text-align:right; font-family:var(--mono);
+  font-size:var(--t-meta); color:var(--ink-3);
+  background:var(--sunken); border-right:1px solid var(--edge);
+  padding:8px var(--s2) 0 0;
+}
+.row .body{flex:1 1 auto; min-width:0; padding:7px var(--s3) 8px var(--s3); border-left:3px solid transparent;}
+/* 배지 잘림 수리: 한 줄 강제를 풀고(flex-wrap), 이름만 말줄임표를 갖는다.
+   바이트·마침 표시가 좁은 폭에서 잘려 나가던 결함의 교정이다. */
+.row .l1{display:flex; align-items:baseline; gap:var(--s1) var(--s2); flex-wrap:wrap; min-width:0;}
+.row .why{font-size:var(--t-tick); font-weight:700; color:var(--ju); white-space:nowrap;}
+.row .sid{font-family:var(--mono); font-size:var(--t-num);}
+.row .nm2{
+  font-size:var(--t-ui); font-weight:600;
+  min-width:0; flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.row .b{margin-left:auto; font-family:var(--mono); font-size:var(--t-meta); color:var(--ink-3); white-space:nowrap;}
+.row .l2{margin-top:1px; font-size:var(--t-meta); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.row.done .nm2,.row.done .sid{color:var(--ink-3); font-weight:400;}
+.row .fin{font-size:var(--t-tick); color:var(--ink-3); white-space:nowrap;}
+.row .fixmark{font-size:var(--t-tick); color:var(--ju); white-space:nowrap;}
+/* 지금 보고 있는 행 — 편집과 같은 뜻이므로 청이다 */
+.row.on{background:var(--sunken);}
+.row.on .body{border-left-color:var(--cheong);}
+.row.on .nm2,.row.on .sid{font-weight:700; color:var(--ink);}
+.listfoot{
+  border-top:1px solid var(--edge); background:var(--sunken);
+  padding:var(--s2) var(--s3); display:flex; gap:var(--s2) var(--s3); flex-wrap:wrap; align-items:center;
+  font-size:var(--t-tick); color:var(--ink-2);
+}
+.key{
+  font-family:var(--mono); font-size:var(--t-tick); line-height:1;
+  border:1px solid var(--edge-strong); border-bottom-width:2px; border-radius:3px;
+  padding:3px 5px; color:var(--ink-2); background:var(--surface);
+}
+
+/* ── 검수 상세 ─────────────────────────────────────────────── */
+.dh{
+  display:flex; align-items:baseline; gap:var(--s2) var(--s3); flex-wrap:wrap;
+  background:var(--sunken); border-bottom:1px solid var(--edge-strong); padding:var(--s3) var(--s4);
+}
+.dh .sid{font-family:var(--mono); font-size:1.0625rem; font-weight:700;}
+.dh .nm2{font-size:var(--t-h3); font-weight:700;}
+.dh .why{font-size:var(--t-meta); font-weight:700; color:var(--ju);}
+.dh .topic{font-size:var(--t-meta); color:var(--ink-2);}
+.dh .pos{margin-left:auto; font-family:var(--mono); font-size:var(--t-meta); color:var(--ink-3);}
+.pairwrap{display:grid; grid-template-columns:1fr 1fr;}
+@media (max-width:820px){ .pairwrap{grid-template-columns:1fr;} }
+.side{min-width:0; border-right:1px solid var(--edge);}
+.side:last-child{border-right:0;}
+@media (max-width:820px){ .side{border-right:0; border-bottom:1px solid var(--edge);} }
+.sh{
+  background:var(--sunken); border-bottom:1px solid var(--edge);
+  padding:5px var(--s4); display:flex; align-items:baseline; gap:var(--s2);
+}
+.sh b{font-size:var(--t-meta); font-weight:700;}
+.sh i{font-style:normal; font-size:var(--t-tick); color:var(--ink-3);}
+/* 학생 원문 — 읽기 전용 칸. 세특 칸과 서체·배경 층을 달리해 다른 물건으로 읽힌다 */
+.read{
+  font-family:var(--serif);
+  background:var(--sunken); padding:var(--s4); font-size:var(--t-body); line-height:1.9;
+  min-height:16rem; white-space:pre-wrap;
+}
+.read.empty{color:var(--ink-3); font-family:var(--gothic); line-height:1.7;}
+/* 세특 — 지금 손대는 칸이므로 청 테두리 */
+.edit{
+  font-family:var(--gothic);
+  background:var(--surface); padding:var(--s4); font-size:var(--t-body); line-height:1.8;
+  min-height:16rem; white-space:pre-wrap;
+  border-bottom:2px solid var(--cheong);
+  box-shadow:0 0 0 1px var(--surface), 0 0 0 3px var(--cheong);
+  outline:none;
+}
+/* 근거 짝 — 괄호 번호가 원문과 세특 양쪽에 같은 번호로 붙는다 (V4 문법) */
+.mk{
+  text-decoration:underline; text-decoration-color:var(--ju);
+  text-decoration-thickness:2px; text-underline-offset:4px;
+}
+.mk::before{
+  content:attr(data-n); display:inline-block;
+  font-family:var(--mono); font-size:var(--t-tick); font-weight:700; line-height:1;
+  color:var(--ju); margin-right:2px; vertical-align:.3em;
+}
+/* 짝이 없는 문장 — 본문 안 낱말 꼬리표 */
+.nopair{text-decoration:underline dotted var(--ju); text-decoration-thickness:1.5px; text-underline-offset:4px;}
+.nopair::after{
+  content:"근거 못 찾음"; display:inline-block;
+  font-family:var(--mono); font-size:var(--t-tick); font-weight:700; line-height:1;
+  color:var(--ju); border:1px solid var(--ju); border-radius:2px;
+  padding:1px 3px; margin-left:4px; vertical-align:.3em;
+}
+/* 금지 낱말 — 물결 밑줄 */
+.ban{color:var(--ju); font-weight:700; text-decoration:underline wavy var(--ju); text-underline-offset:4px;}
+
+.dfoot{border-top:1px solid var(--edge-strong); padding:var(--s4);}
+.meter{font-family:var(--mono); font-size:var(--t-ui); color:var(--ink);}
+.meter .over{color:var(--ju); font-weight:700;}
+.warnline{
+  margin-top:var(--s3); display:flex; align-items:center; gap:var(--s2) var(--s3); flex-wrap:wrap;
+  border-left:3px solid var(--ju); background:var(--ju-soft); padding:var(--s2) var(--s3);
+  font-size:var(--t-ui); color:var(--ink);
+}
+.warnline b{color:var(--ju);}
+.pairnotes{margin-top:var(--s3); display:flex; flex-direction:column; gap:var(--s2);}
+.pairnote{
+  display:flex; align-items:center; gap:var(--s2) var(--s3); flex-wrap:wrap;
+  font-size:var(--t-meta); color:var(--ink-2); line-height:1.65;
+}
+.pairnote .pn{font-family:var(--mono); font-weight:700; color:var(--ju);}
+.markfail{margin-top:var(--s3); font-size:var(--t-meta); color:var(--ink-2);}
+.memo{margin-top:var(--s4); display:flex; flex-direction:column; gap:var(--s2);}
+.memo label{font-size:var(--t-meta); color:var(--ink-2);}
+.memo input{
+  font:inherit; font-size:var(--t-ui); color:var(--ink); background:var(--surface);
+  border:1px solid var(--edge-strong); border-radius:2px; padding:7px var(--s3); width:100%;
+}
+.acts2{margin-top:var(--s4); display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap;}
+.acts2 .note{font-size:var(--t-meta); color:var(--ink-3);}
+.detail-empty{padding:var(--s5) var(--s4); font-size:var(--t-ui); color:var(--ink-2); line-height:1.75;}
+
+/* ── 단추 ───────────────────────────────────────────────────── */
+.btn{
+  display:inline-flex; align-items:center; gap:var(--s2);
+  background:var(--surface); color:var(--ink);
+  border:1px solid var(--edge-strong); border-radius:2px;
+  padding:7px var(--s3); font-size:var(--t-ui); cursor:pointer;
+  transition:background-color 120ms ease;
+}
+.btn:hover{background:var(--sunken);}
+.btn:active{transform:translateY(1px);}
+.btn:disabled{color:var(--ink-3); border-color:var(--edge); cursor:default; background:var(--surface); transform:none;}
+.btn.small{padding:3px var(--s2); font-size:var(--t-meta);}
+.btn.ju{background:var(--ju); color:var(--ju-ink); border-color:var(--ju); font-weight:600;}
+.btn.ju:hover{filter:brightness(1.06);}
+:focus-visible{outline:none; box-shadow:0 0 0 2px var(--surface), 0 0 0 4px var(--cheong);}
+
+/* ── 저장 — 문서 프레임 밖의 독립 구역 ──────────────────────── */
+.savezone{
+  border-top:2px solid var(--edge-strong); background:var(--field);
+  margin-top:var(--s4);
+}
+.savezone-in{max-width:1240px; margin:0 auto; padding:var(--s5) var(--s5) var(--s7);}
+.savezone h2{font-size:var(--t-h3); font-weight:700; margin-bottom:var(--s2);}
+.savezone .lead{font-size:var(--t-ui); color:var(--ink-2); max-width:44rem; line-height:1.75; margin-bottom:var(--s4);}
+.point{position:relative; padding-left:22px; margin-bottom:var(--s4);}
+.point::before{
+  content:""; position:absolute; left:2px; top:.42em;
+  width:9px; height:9px; border-left:2px solid var(--ju); border-bottom:2px solid var(--ju);
+  transform:rotate(-45deg);
+}
+.point .fact{font-size:var(--t-body); font-weight:700; line-height:1.55;}
+.point .why2{margin-top:var(--s1); font-size:var(--t-meta); color:var(--ink-2); line-height:1.65; max-width:44rem;}
+.point .acts{margin-top:var(--s3); display:flex; gap:var(--s2); flex-wrap:wrap;}
+.roles{display:grid; grid-template-columns:1fr 1fr; gap:var(--s4); max-width:66rem;}
+@media (max-width:820px){ .roles{grid-template-columns:1fr;} }
+.role{border:1px solid var(--edge-strong); border-radius:2px; padding:var(--s3) var(--s4); background:var(--surface);}
+.role.keep{border-color:var(--ju); border-left-width:3px;}
+.role h3{margin:0 0 var(--s2); font-size:var(--t-ui); font-weight:700;}
+.role.keep h3::after{content:" · 실명 있음"; color:var(--ju); font-weight:600;}
+.role .file{font-family:var(--mono); font-size:var(--t-ui); color:var(--ink);}
+.role .sub{font-size:var(--t-meta); color:var(--ink-2); margin-top:2px; line-height:1.65;}
+.saverow{display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap; margin-top:var(--s4);}
+.saverow .note{font-size:var(--t-meta); color:var(--ink-2); max-width:36rem; line-height:1.65;}
+.saveresult{font-size:var(--t-meta); color:var(--ink-2); margin-top:var(--s2); max-width:44rem; line-height:1.65;}
+
+.foot{max-width:1240px; margin:0 auto; padding:var(--s4) var(--s5) var(--s6);
+      font-size:var(--t-tick); color:var(--ink-3);}
+.tplnote{max-width:44rem; margin:var(--s7) auto; padding:0 var(--s5);
+         font-size:var(--t-body); color:var(--ink-2); line-height:1.8;}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important; transition-duration:.01ms !important; scroll-behavior:auto !important;}
+}
+@media (max-width:900px){
+  .rig{padding:var(--s2) var(--s3);}
+  .rig-priv{margin-left:0; flex-basis:100%;}
+  .desk{padding:var(--s4) var(--s3) var(--s5);}
+  .savezone-in{padding:var(--s4) var(--s3) var(--s6);}
+  .foot{padding:var(--s3) var(--s3) var(--s5);}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#detail">펼쳐진 학생으로 건너뛰기</a>
+
+<header class="rig">
+  <div class="rig-id"><b>세특 검수</b><span id="rig-activity"></span></div>
+  <span class="rig-counts" id="rig-counts"></span>
+  <button type="button" class="rig-chip" id="rig-chip" aria-label="저장 상태 — 누르면 저장 구역으로 이동">저장한 것 없음</button>
+  <p class="rig-priv">학생 실명이 있는 화면입니다 — 화면을 공유하거나 자리를 비울 때 닫아 주세요.</p>
+</header>
+
+<main class="desk">
+  <div class="tplnote" id="tpl-note" hidden></div>
+
+  <div id="review-root" hidden>
+    <div class="lede">
+      <h1 id="lede-title">원문과 세특을 나란히 놓고 고칩니다</h1>
+      <p>왼쪽이 학생이 쓴 글, 오른쪽이 세특 초안입니다. 오른쪽만 고칠 수 있습니다.</p>
+      <p>①② 같은 번호가 붙은 두 곳은 같은 내용입니다. 번호가 없는 문장은 제가 원문에서 근거를 찾지 못한 문장입니다 — 수업에서 실제 있었던 일이면 그대로 두시고, 아니면 고쳐 주세요.</p>
+    </div>
+
+    <div class="cols">
+      <section class="panel" aria-label="검수 목록">
+        <div class="ph"><h2>검수 목록</h2><span class="ph-meta" id="list-meta"></span></div>
+        <div class="scroll"><ul id="review-list"></ul></div>
+        <div class="listfoot">
+          <span class="key">Tab</span> 목록으로
+          <span class="key">↑↓</span> 이동
+          <span class="key">Enter</span> 펼치기
+          <span class="key">Esc</span> 목록으로
+          <span class="key">Ctrl Enter</span> 마치고 다음
+        </div>
+      </section>
+
+      <section class="panel" id="detail" aria-label="펼쳐진 학생">
+        <div id="detail-body">
+          <p class="detail-empty">왼쪽 목록에서 학생을 고르면 여기에 원문과 세특이 나란히 나옵니다.</p>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<section class="savezone" id="save-zone" aria-label="검수 저장" hidden>
+  <div class="savezone-in">
+    <h2>검수 저장</h2>
+    <p class="lead">저장은 두 번 누릅니다. 먼저 'AI에게 줄 파일'(이름·학번 없음), 그다음 '보관용 파일'(실명 있음). 대화창에 넣는 건 첫 번째 파일 하나뿐입니다.</p>
+
+    <div class="point" id="save-pending" hidden>
+      <p class="fact" id="save-pending-fact"></p>
+      <p class="why2">지금 저장하셔도 고치신 내용은 그대로 들어갑니다. 다만 아직 눈으로 보지 않은 문장이 함께 나갑니다.</p>
+      <div class="acts">
+        <button type="button" class="btn" id="btn-goto-undone"></button>
+      </div>
+    </div>
+
+    <div class="roles">
+      <div class="role">
+        <h3>AI에게 주는 것 — 1단계</h3>
+        <p class="file">검수diff(AI용).json</p>
+        <p class="sub" id="role-ai-sub">고친 내용만 담깁니다. 이름도 학번도 들어가지 않습니다.</p>
+      </div>
+      <div class="role keep">
+        <h3>이 컴퓨터에만 두는 것 — 2단계</h3>
+        <p class="file">검수본(실명·보관용).json</p>
+        <p class="sub" id="role-local-sub">전원의 실명과 학번이 있습니다. 활동 폴더에만 두세요.</p>
+      </div>
+    </div>
+
+    <div class="saverow">
+      <button type="button" class="btn ju" id="btn-save-ai">1단계 · AI에게 줄 파일 저장</button>
+      <button type="button" class="btn" id="btn-save-local" disabled>2단계 · 실명 검수본도 저장</button>
+      <p class="note">내려받기 목록에서는 나중에 받은 (실명·보관용)이 위에 옵니다. 대화창에는 이름에 (AI용)이 붙은 쪽만 넣으세요.</p>
+    </div>
+    <p class="saveresult" id="save-ai-result" aria-live="polite"></p>
+    <p class="saveresult" id="save-local-result" aria-live="polite"></p>
+  </div>
+</section>
+
+<p class="foot">고친 내용은 저장 단추를 누르기 전까지 파일에 남지 않습니다. 창을 닫으면 사라집니다.</p>
+
+<script type="application/json" id="검수데이터">__검수데이터__</script>
+<script>
+"use strict";
+/* ═════════ 공통 ═════════ */
+const esc = s => String(s == null ? "" : s)
+  .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const U8 = s => new TextEncoder().encode(s || "").length;
+
+const CIRCLED = ["①","②","③","④","⑤","⑥","⑦","⑧","⑨","⑩",
+                 "⑪","⑫","⑬","⑭","⑮","⑯","⑰","⑱","⑲","⑳"];
+const numLabel = n => CIRCLED[n - 1] || `(${n})`;
+
+/**
+ * 짝 표식 계획 — 문자열 부분일치로 양쪽 위치를 찾는다.
+ * 한쪽이라도 못 찾은 짝, 세특에서 못 찾은 짝없음 구절은 그리지 않는 대신
+ * 실패로 세어 화면이 평문으로 알린다(조용한 생략 금지).
+ */
+function planPairMarks(원문, 세특, 짝목록, 짝없음목록) {
+  const src = 원문 || "", dst = 세특 || "";
+  const 짝 = []; const 짝없음 = []; let 실패 = 0;
+  for (const p of (짝목록 || [])) {
+    const ds = p && p.세특 ? dst.indexOf(p.세특) : -1;
+    const ss = p && p.원문 ? src.indexOf(p.원문) : -1;
+    if (ds < 0 || ss < 0) { 실패++; continue; }
+    짝.push({ n: p.n, 세특시작: ds, 세특끝: ds + p.세특.length,
+              원문시작: ss, 원문끝: ss + p.원문.length });
+  }
+  for (const t of (짝없음목록 || [])) {
+    const i = t ? dst.indexOf(t) : -1;
+    if (i < 0) { 실패++; continue; }
+    짝없음.push({ 시작: i, 끝: i + t.length });
+  }
+  return { 짝, 짝없음, 실패 };
+}
+
+/**
+ * 본문에 표식 span을 끼워 넣은 HTML을 만든다. 본문은 전부 이스케이프되므로
+ * 학생 글에 닫는 스크립트 태그가 있어도 문자 그대로 보일 뿐이다.
+ * 겹치는 표식은 앞의 것이 이기고 뒤엣것은 버린다.
+ */
+function renderMarked(text, spans) {
+  const t = text || "";
+  const s = [...(spans || [])].sort((a, b) => a.start - b.start);
+  let out = "", pos = 0;
+  for (const sp of s) {
+    if (sp.start < pos || sp.end > t.length || sp.end <= sp.start) continue;
+    out += esc(t.slice(pos, sp.start));
+    out += `<span class="${sp.cls}"${sp.attr || ""}>${esc(t.slice(sp.start, sp.end))}</span>`;
+    pos = sp.end;
+  }
+  out += esc(t.slice(pos));
+  return out;
+}
+
+/** 마치고 다음 — 검수 완료 행으로는 이동하지 않는다. 뒤에 없으면 앞을 돈다. */
+function nextUndoneIndex(students, from) {
+  const n = students.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (from + k) % n;
+    if (i === from) break;
+    if (!students[i].검수완료) return i;
+  }
+  return null;
+}
+
+/** 파일 저장 — 위치 선택이 되면 그쪽, 안 되면 내려받기(도구.html과 같은 처리). */
+async function saveFile(name, obj) {
+  const text = JSON.stringify(obj, null, 1);
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+      });
+      const w = await handle.createWritable();
+      await w.write(text);
+      await w.close();
+      return "선택한 위치";
+    } catch (err) {
+      if (err && err.name === "AbortError") return null;
+    }
+  }
+  const blob = new Blob([text], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return "내려받기 폴더";
+}
+
+/* ═════════ REVIEW ═════════ */
+const REVIEW = (() => {
+  let data = null;
+  let original = new Map();
+  let currentIdx = null;
+  const state = { aiSaved: false, localSaved: false, baseline: "" };
+
+  const keyOf = s => s.토큰 || `학번:${s.학번}`;
+
+  function snapshot() {
+    if (!data) return "";
+    return JSON.stringify(data.students.map(s => [s.세특, s.검수메모, s.검수완료]));
+  }
+  const isDirty = () => !!data && snapshot() !== state.baseline;
+
+  function bannedHits(text) {
+    const hits = [];
+    for (const w of (data.금지어 || [])) if (w && text.includes(w)) hits.push(w);
+    const pat = data.금지문자패턴;
+    if (pat) {
+      try {
+        for (const c of new Set(text.match(new RegExp(pat, "gu")) || [])) hits.push(c);
+      } catch (err) {
+        hits.push(`(금지문자 패턴 오류: ${err.message})`);
+      }
+    }
+    return hits;
+  }
+
+  function load(json) {
+    data = json;
+    original = new Map();
+    currentIdx = null;
+    state.aiSaved = false;
+    state.localSaved = false;
+    (data.students || []).forEach(s => {
+      original.set(keyOf(s), { 세특: s.세특 || "", 비고: s.비고 || "" });
+      // 심은 데이터에 이미 검수완료 표시가 있으면 존중한다(이어하기 대비).
+      s.검수완료 = s.검수완료 === true;
+      s.검수메모 = typeof s.검수메모 === "string" ? s.검수메모 : "";
+    });
+    // 우선 검토 대상을 위로 — 로드 시 한 번만 정렬하고 이후에는 재정렬하지 않는다.
+    data.students.sort((a, b) => (b.우선검토?.length || 0) - (a.우선검토?.length || 0));
+    state.baseline = snapshot();
+    renderAll();
+  }
+
+  /* ── 렌더 ── */
+  function renderAll() {
+    if (!data) return;
+    document.getElementById("review-root").hidden = false;
+    document.getElementById("save-zone").hidden = false;
+    document.getElementById("rig-activity").textContent = data.활동명 || "";
+    if (data.활동명) {
+      document.getElementById("lede-title").textContent =
+        `${data.활동명} — 원문과 세특을 나란히 놓고 고칩니다`;
+    }
+    renderHead();
+    renderList();
+    renderDetail();
+    renderSaveSection();
+  }
+
+  function counts() {
+    const total = data.students.length;
+    const done = data.students.filter(s => s.검수완료).length;
+    const changed = data.students.filter(s => original.get(keyOf(s))?.세특 !== s.세특).length;
+    return { total, done, left: total - done, changed };
+  }
+
+  function renderHead() {
+    const c = counts();
+    document.getElementById("rig-counts").textContent =
+      `대상 ${c.total} · 마침 ${c.done} · 남은 ${c.left} · 고친 것 ${c.changed}`;
+    document.getElementById("list-meta").textContent = `${c.total}명 · ${c.done}명 마침`;
+    const chip = document.getElementById("rig-chip");
+    chip.textContent = state.aiSaved
+      ? (state.localSaved ? "두 파일 저장함" : "AI용 저장함 · 보관용 남음")
+      : "저장한 것 없음";
+  }
+
+  function rowHtml(s, idx, ord) {
+    const reason = (s.우선검토 && s.우선검토[0]) || "";
+    const byte = U8(s.세특);
+    const changed = original.get(keyOf(s))?.세특 !== s.세특;
+    const cls = ["row"];
+    if (s.검수완료) cls.push("done");
+    if (idx === currentIdx) cls.push("on");
+    return `<li class="${cls.join(" ")}" data-i="${idx}" tabindex="-1" role="button"
+              ${idx === currentIdx ? 'aria-current="true"' : ""}>
+      <span class="gut">${ord}</span>
+      <span class="body">
+        <span class="l1">
+          ${reason ? `<span class="why">${esc(reason)}</span>` : ""}
+          <span class="sid">${esc(s.학번)}</span>
+          <span class="nm2">${esc(s.이름)}</span>
+          ${s.검수완료 ? `<span class="fin">마침</span>` : ""}
+          ${changed ? `<span class="fixmark">수정됨</span>` : ""}
+          <span class="b">${byte}B</span>
+        </span>
+        ${s.핵심소재 ? `<span class="l2">${esc(s.핵심소재)}</span>` : ""}
+      </span>
+    </li>`;
+  }
+
+  function renderList() {
+    const flagged = data.students.filter(s => s.우선검토?.length);
+    const rest = data.students.filter(s => !s.우선검토?.length);
+    let html = "";
+    if (flagged.length) {
+      const fdone = flagged.filter(s => s.검수완료).length;
+      html += `<li class="grp"><b>먼저 볼 ${flagged.length}명</b><span>${fdone}명 마침</span></li>`;
+      html += flagged.map((s, k) => rowHtml(s, data.students.indexOf(s), k + 1)).join("");
+    }
+    const rdone = rest.filter(s => s.검수완료).length;
+    html += `<li class="grp"><b>나머지 ${rest.length}명</b><span>${rdone}명 마침</span></li>`;
+    html += rest.map((s, k) => rowHtml(s, data.students.indexOf(s), k + 1)).join("");
+    const listEl = document.getElementById("review-list");
+    listEl.innerHTML = html;
+
+    // roving tabindex — Tab 한 번으로 들어오고, 안에서는 방향키로 옮긴다.
+    const rows = [...listEl.querySelectorAll("li.row")];
+    const setCurrent = (pos, focus) => {
+      if (!rows.length) return;
+      const p = Math.max(0, Math.min(rows.length - 1, pos));
+      rows.forEach((r, k) => { r.tabIndex = k === p ? 0 : -1; });
+      if (focus) rows[p].focus();
+    };
+    const onPos = rows.findIndex(r => Number(r.dataset.i) === currentIdx);
+    setCurrent(onPos >= 0 ? onPos : 0, false);
+
+    rows.forEach((li, pos) => {
+      li.addEventListener("click", e => {
+        if (e.target.closest("button, input")) return;
+        openStudent(Number(li.dataset.i));
+      });
+      li.addEventListener("keydown", e => {
+        if (e.target !== li) return;
+        switch (e.key) {
+          case "ArrowDown": case "j": e.preventDefault(); setCurrent(pos + 1, true); return;
+          case "ArrowUp":   case "k": e.preventDefault(); setCurrent(pos - 1, true); return;
+          case "Home": e.preventDefault(); setCurrent(0, true); return;
+          case "End":  e.preventDefault(); setCurrent(rows.length - 1, true); return;
+          case "Enter":
+            e.preventDefault();
+            if (e.ctrlKey || e.metaKey) finishAndNext(Number(li.dataset.i));
+            else openStudent(Number(li.dataset.i));
+            return;
+          case " ": e.preventDefault(); openStudent(Number(li.dataset.i)); return;
+        }
+      });
+    });
+  }
+
+  function focusRow(i) {
+    const li = document.querySelector(`#review-list li.row[data-i="${i}"]`);
+    if (!li) return;
+    document.querySelectorAll("#review-list li.row").forEach(r => { r.tabIndex = -1; });
+    li.tabIndex = 0;
+    li.focus();
+  }
+
+  function openStudent(i) {
+    currentIdx = i;
+    renderList();
+    renderDetail();
+    focusRow(i);
+  }
+
+  function posLabel(s) {
+    const flagged = data.students.filter(x => x.우선검토?.length);
+    const rest = data.students.filter(x => !x.우선검토?.length);
+    if (s.우선검토?.length) return `먼저 볼 ${flagged.length}명 중 ${flagged.indexOf(s) + 1}번째`;
+    return `나머지 ${rest.length}명 중 ${rest.indexOf(s) + 1}번째`;
+  }
+
+  function renderDetail() {
+    const box = document.getElementById("detail-body");
+    if (currentIdx == null || !data.students[currentIdx]) {
+      box.innerHTML = `<p class="detail-empty">왼쪽 목록에서 학생을 고르면 여기에 원문과 세특이 나란히 나옵니다.</p>`;
+      return;
+    }
+    const s = data.students[currentIdx];
+    const plan = planPairMarks(s.원문 || "", s.세특 || "", s.짝, s.짝없음);
+
+    const srcSpans = plan.짝.map(p => ({
+      start: p.원문시작, end: p.원문끝, cls: "mk",
+      attr: ` data-n="${esc(numLabel(p.n))}" data-pair="src-${esc(String(p.n))}"`,
+    }));
+    const dstSpans = plan.짝.map(p => ({
+      start: p.세특시작, end: p.세특끝, cls: "mk",
+      attr: ` data-n="${esc(numLabel(p.n))}" data-pair="dst-${esc(String(p.n))}"`,
+    }));
+    plan.짝없음.forEach((m, k) => {
+      dstSpans.push({ start: m.시작, end: m.끝, cls: "nopair", attr: ` data-nopair="${k}"` });
+    });
+    // 금지 낱말도 처음 열 때 본문에 표시한다(첫 등장 위치, 짝 표식과 겹치면 짝이 이긴다).
+    const hits = bannedHits(s.세특 || "");
+    for (const w of hits) {
+      const i = (s.세특 || "").indexOf(w);
+      if (i >= 0) dstSpans.push({ start: i, end: i + w.length, cls: "ban" });
+    }
+
+    const srcHtml = (s.원문 || "").trim()
+      ? `<div class="read" id="read-body">${renderMarked(s.원문, srcSpans)}</div>`
+      : `<div class="read empty" id="read-body">원문이 없습니다 — 미제출이거나 이 활동은 원문을 싣지 않았습니다. 세특의 사실 여부는 수업 기억으로 봐 주세요.</div>`;
+
+    const u = U8(s.세특);
+    const over = data.상한바이트 && u > data.상한바이트;
+
+    const pairNotes = plan.짝.map(p => `
+      <p class="pairnote"><span class="pn">${esc(numLabel(p.n))}</span>
+        원문 ${esc(numLabel(p.n))}과 짝지었습니다 — 맞는지 봐 주세요.
+        <button type="button" class="btn small" data-goto="dst-${esc(String(p.n))}">그 자리로 가기</button></p>`).join("");
+    const noPairNotes = plan.짝없음.map((m, k) => `
+      <p class="pairnote"><span class="pn">근거 못 찾음</span>
+        제가 원문에서 근거를 찾지 못한 문장입니다 — 수업에서 실제 있었던 일이면 두시고, 아니면 고쳐 주세요.
+        <button type="button" class="btn small" data-goto-nopair="${k}">그 자리로 가기</button></p>`).join("");
+    const failNote = plan.실패
+      ? `<p class="markfail">표시하지 못한 짝 ${plan.실패}건이 있습니다. 그 짝은 표시 없이 봐 주세요 — 문장이 달라져 자리를 찾지 못했습니다.</p>`
+      : "";
+
+    box.innerHTML = `
+      <div class="dh">
+        <span class="sid">${esc(s.학번)}</span>
+        <span class="nm2">${esc(s.이름)}</span>
+        ${s.우선검토?.length ? `<span class="why">${esc(s.우선검토.join(" · "))}</span>` : ""}
+        ${s.핵심소재 ? `<span class="topic">${esc(s.핵심소재)}</span>` : ""}
+        <span class="pos">${esc(posLabel(s))}</span>
+      </div>
+      <div class="pairwrap">
+        <div class="side">
+          <div class="sh"><b>학생 원문</b><i>읽기만 · 고칠 수 없습니다</i></div>
+          ${srcHtml}
+        </div>
+        <div class="side">
+          <div class="sh"><b>세특 초안</b><i>여기만 고칩니다</i></div>
+          <div class="edit" id="edit-body" contenteditable="true" role="textbox"
+               aria-label="세특 초안 — 여기만 고칩니다">${renderMarked(s.세특, dstSpans)}</div>
+        </div>
+      </div>
+      <div class="dfoot">
+        <p class="meter" id="meter"></p>
+        <div class="warnline" id="warnline" hidden></div>
+        <div class="pairnotes">${pairNotes}${noPairNotes}</div>
+        ${failNote}
+        <div class="memo">
+          <label for="memo-input">왜 고쳤는지 한 줄 (선택)</label>
+          <input id="memo-input" type="text" value="${esc(s.검수메모)}">
+        </div>
+        <div class="acts2">
+          <button type="button" class="btn ju" id="btn-done-next">마치고 다음 (Ctrl Enter)</button>
+          <button type="button" class="btn" id="btn-skip">건너뛰기</button>
+          <span class="note">고친 내용은 저장 단추를 누르기 전까지 파일에 남지 않습니다.</span>
+        </div>
+      </div>`;
+
+    updateMeta();
+    bindDetail(s);
+  }
+
+  function updateMeta() {
+    if (currentIdx == null) return;
+    const s = data.students[currentIdx];
+    const u = U8(s.세특);
+    const over = data.상한바이트 && u > data.상한바이트;
+    const meterEl = document.getElementById("meter");
+    if (meterEl) {
+      let t = `${u}바이트 (NEIS 기준)`;
+      if (data.상한바이트) {
+        t += ` · 상한 ${data.상한바이트} · `;
+        t += over ? `${u - data.상한바이트}바이트 넘었습니다` : `남은 ${data.상한바이트 - u}바이트`;
+      }
+      meterEl.innerHTML = over ? `<span class="over">${esc(t)}</span>` : esc(t);
+    }
+    const hits = bannedHits(s.세특 || "");
+    const warnEl = document.getElementById("warnline");
+    if (warnEl) {
+      if (hits.length) {
+        warnEl.hidden = false;
+        warnEl.innerHTML =
+          `<span>금지 낱말이 있습니다 — <b>${hits.map(esc).join(", ")}</b></span>
+           <button type="button" class="btn small" id="btn-goto-ban">그 자리로 가기</button>`;
+        const b = warnEl.querySelector("#btn-goto-ban");
+        if (b) b.addEventListener("click", () => {
+          const el = document.querySelector("#edit-body .ban");
+          if (el) el.scrollIntoView({ block: "center" });
+        });
+      } else {
+        warnEl.hidden = true;
+        warnEl.innerHTML = "";
+      }
+    }
+  }
+
+  function bindDetail(s) {
+    const ed = document.getElementById("edit-body");
+    if (ed && ed.addEventListener) {
+      let t = null;
+      const readText = () => (typeof ed.innerText === "string" ? ed.innerText : ed.textContent) || "";
+      ed.addEventListener("input", () => {
+        s.세특 = readText();
+        clearTimeout(t);
+        t = setTimeout(() => { renderHead(); updateMeta(); renderSaveSection(); }, 300);
+      });
+      ed.addEventListener("blur", () => {
+        s.세특 = readText();
+        renderHead(); updateMeta(); renderList(); renderSaveSection();
+      });
+      ed.addEventListener("paste", e => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+        document.execCommand("insertText", false, text);
+      });
+      ed.addEventListener("keydown", e => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault(); finishAndNext(currentIdx);
+        }
+        if (e.key === "Escape") { e.preventDefault(); focusRow(currentIdx); }
+      });
+    }
+    const memo = document.getElementById("memo-input");
+    if (memo && memo.addEventListener) {
+      memo.addEventListener("input", e => { s.검수메모 = e.target.value; });
+      memo.addEventListener("keydown", e => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault(); finishAndNext(currentIdx);
+        }
+      });
+    }
+    const doneBtn = document.getElementById("btn-done-next");
+    if (doneBtn && doneBtn.addEventListener)
+      doneBtn.addEventListener("click", () => finishAndNext(currentIdx));
+    const skipBtn = document.getElementById("btn-skip");
+    if (skipBtn && skipBtn.addEventListener)
+      skipBtn.addEventListener("click", () => {
+        const next = (currentIdx + 1) % data.students.length;
+        openStudent(next);
+      });
+    document.querySelectorAll("#detail-body [data-goto]").forEach(b => {
+      b.addEventListener("click", () => {
+        const el = document.querySelector(`#edit-body [data-pair="${b.dataset.goto}"]`);
+        if (el) el.scrollIntoView({ block: "center" });
+      });
+    });
+    document.querySelectorAll("#detail-body [data-goto-nopair]").forEach(b => {
+      b.addEventListener("click", () => {
+        const el = document.querySelector(`#edit-body [data-nopair="${b.dataset.gotoNopair}"]`);
+        if (el) el.scrollIntoView({ block: "center" });
+      });
+    });
+  }
+
+  function finishAndNext(i) {
+    if (i == null || !data.students[i]) return;
+    data.students[i].검수완료 = true;
+    const next = nextUndoneIndex(data.students, i);
+    renderHead();
+    renderSaveSection();
+    if (next != null) {
+      openStudent(next);
+    } else {
+      currentIdx = null;
+      renderList();
+      renderDetail();
+      const zone = document.getElementById("save-zone");
+      if (zone && zone.scrollIntoView) zone.scrollIntoView({ block: "start" });
+    }
+  }
+
+  /* ── 산출 — 도구.html의 계약 그대로 ── */
+  function buildOutputs() {
+    const byClass = new Map();
+    for (const s of data.students) {
+      const name = s.반 || "1반";
+      if (!byClass.has(name)) byClass.set(name, []);
+      byClass.get(name).push({
+        학번: s.학번, 이름: s.이름, 핵심소재: s.핵심소재 || "",
+        톤등급: s.톤등급 || "", 세특: s.세특 || "",
+        비고: s.비고 || "", 예외: !!s.예외,
+      });
+    }
+    const 검수본 = { classes: [...byClass].map(([name, students]) => ({ name, students })) };
+
+    const 변경 = [];
+    for (const s of data.students) {
+      const o = original.get(keyOf(s)) || { 세특: "", 비고: "" };
+      if (o.세특 === s.세특 && !s.검수메모) continue;
+      변경.push({
+        토큰: s.토큰 || null,
+        톤등급: s.톤등급 || "",
+        예외: !!s.예외,
+        전: o.세특,
+        후: s.세특,
+        검수메모: s.검수메모 || "",
+        바이트변화: { 전: U8(o.세특), 후: U8(s.세특) },
+      });
+    }
+    return {
+      검수본,
+      diff: {
+        활동명: data.활동명 || "",
+        총원: data.students.length,
+        검수완료: data.students.filter(s => s.검수완료).length,
+        수정: 변경.length,
+        변경,
+      },
+    };
+  }
+
+  /* ── 저장 구역 ── */
+  const canSaveLocal = () => state.aiSaved;
+  function markAiSaved() { state.aiSaved = true; state.baseline = snapshot(); }
+  function markLocalSaved() { state.localSaved = true; state.baseline = snapshot(); }
+
+  function renderSaveSection() {
+    const c = counts();
+    const pending = document.getElementById("save-pending");
+    const fact = document.getElementById("save-pending-fact");
+    const gotoBtn = document.getElementById("btn-goto-undone");
+    if (c.left > 0) {
+      pending.hidden = false;
+      fact.textContent = `검수 완료 표시가 없는 학생이 ${c.left}명 있습니다.`;
+      gotoBtn.textContent = `${c.left}명 보러 가기`;
+    } else {
+      pending.hidden = true;
+    }
+    const localBtn = document.getElementById("btn-save-local");
+    localBtn.disabled = !canSaveLocal();
+  }
+
+  function bindSaveZone() {
+    const gotoBtn = document.getElementById("btn-goto-undone");
+    if (gotoBtn && gotoBtn.addEventListener) gotoBtn.addEventListener("click", () => {
+      const first = data ? data.students.findIndex(s => !s.검수완료) : -1;
+      if (first < 0) return;
+      openStudent(first);
+      const detail = document.getElementById("detail");
+      if (detail && detail.scrollIntoView) detail.scrollIntoView({ block: "start" });
+    });
+
+    const aiBtn = document.getElementById("btn-save-ai");
+    if (aiBtn && aiBtn.addEventListener) aiBtn.addEventListener("click", async () => {
+      const { diff } = buildOutputs();
+      const where = await saveFile("검수diff(AI용).json", diff);
+      const result = document.getElementById("save-ai-result");
+      if (where === null) { result.textContent = "저장을 취소했습니다."; return; }
+      markAiSaved();
+      result.textContent = where === "선택한 위치"
+        ? `검수diff(AI용).json을 저장했습니다 — 고친 것 ${diff.변경.length}건. 대화창에는 이 파일만 넣으세요.`
+        : `검수diff(AI용).json을 내려받았습니다 — 고친 것 ${diff.변경.length}건. 내려받기 폴더를 확인해 주세요. 대화창에는 이 파일만 넣으세요.`;
+      document.getElementById("role-ai-sub").textContent =
+        `고친 것 ${diff.변경.length}건 · 이름·학번 없음 · 방금 저장함`;
+      renderHead();
+      renderSaveSection();
+    });
+
+    const localBtn = document.getElementById("btn-save-local");
+    if (localBtn && localBtn.addEventListener) localBtn.addEventListener("click", async () => {
+      if (!canSaveLocal()) return;
+      const { 검수본 } = buildOutputs();
+      const where = await saveFile("검수본(실명·보관용).json", 검수본);
+      const result = document.getElementById("save-local-result");
+      if (where === null) { result.textContent = "저장을 취소했습니다."; return; }
+      markLocalSaved();
+      const n = 검수본.classes.reduce((k, c2) => k + c2.students.length, 0);
+      result.textContent =
+        `검수본(실명·보관용).json을 저장했습니다 — ${n}명, 실명 있음. 활동 폴더에만 두세요. 대화창에 넣을 것은 (AI용)이 붙은 쪽입니다.`;
+      document.getElementById("role-local-sub").textContent =
+        `${n}명 · 실명과 학번 있음 · 방금 저장함 — 활동 폴더에만 두세요`;
+      renderHead();
+      renderSaveSection();
+    });
+
+    const chip = document.getElementById("rig-chip");
+    if (chip && chip.addEventListener) chip.addEventListener("click", () => {
+      const zone = document.getElementById("save-zone");
+      if (zone && zone.scrollIntoView) zone.scrollIntoView({ block: "start" });
+    });
+  }
+  bindSaveZone();
+
+  window.addEventListener("beforeunload", e => {
+    if (isDirty()) { e.preventDefault(); e.returnValue = ""; }
+  });
+
+  return {
+    load, buildOutputs, bannedHits, isDirty,
+    canSaveLocal, markAiSaved, markLocalSaved,
+    getData: () => data,
+  };
+})();
+
+/* ═════════ 심은 데이터 부팅 ═════════ */
+(function boot() {
+  const note = document.getElementById("tpl-note");
+  let raw = "";
+  try { raw = document.getElementById("검수데이터").textContent || ""; } catch (err) { raw = ""; }
+  raw = raw.trim();
+  if (!raw || raw.indexOf("__" + "검수데이터" + "__") >= 0) {
+    note.hidden = false;
+    note.textContent =
+      "이 파일은 빈 템플릿입니다. 대화창에서 검수 화면을 만들어 달라고 하시면, " +
+      "학생 데이터가 심긴 검수.html이 활동 폴더에 생깁니다. 그 파일을 여세요.";
+    return;
+  }
+  let json = null;
+  try { json = JSON.parse(raw); } catch (err) {
+    note.hidden = false;
+    note.textContent =
+      "심긴 데이터를 읽지 못했습니다. 대화창에서 검수 화면을 다시 만들어 달라고 하세요. (" + err.message + ")";
+    return;
+  }
+  if (!json || !Array.isArray(json.students) || !json.students.length) {
+    note.hidden = false;
+    note.textContent = "심긴 데이터에 학생이 없습니다. 대화창에서 검수 화면을 다시 만들어 달라고 하세요.";
+    return;
+  }
+  REVIEW.load(json);
+})();
+
+window.TOOLS = { REVIEW, U8, esc, planPairMarks, renderMarked, numLabel, nextUndoneIndex };
+</script>
+</body>
+</html>

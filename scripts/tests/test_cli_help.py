@@ -14,6 +14,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 CLIS = {
     "pseudonymize.py": [
         "roster", "issue", "mask", "memo", "score", "finalize", "review-bundle", "destroy",
+        "detect", "confirm-html",
     ],
     "verify_seteuk.py": [],
     "extract_sources.py": [],
