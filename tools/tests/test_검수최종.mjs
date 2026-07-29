@@ -221,8 +221,9 @@ ok(T.REVIEW.isDirty() === false, "로드 직후에는 미저장 수정이 없다
 // 입력에서 올리기를 없앤 방향과 어긋나게, 저장 안내가 "대화창에 넣으세요"라고
 // 시키던 것을 고쳤다. diff는 토큰뿐이라 에이전트가 활동 폴더에서 직접 읽는다.
 const html = readFileSync(new URL("../검수템플릿.html", import.meta.url), "utf-8");
-ok(!html.includes("대화창에 넣는 건") && !html.includes("대화창에는 이 파일만"),
-   "diff를 대화창에 올리라는 지시가 없다");
+ok(!html.includes("대화창에 넣는 건") && !html.includes("대화창에는 이 파일만")
+   && !html.includes("끌어다") && !html.includes("첨부"),
+   "diff를 대화창에 올리라는 지시가 예비 경로로도 없다");
 ok(html.includes("검수 끝났어"),
    "\"검수 끝났어\" 한마디로 끝난다는 안내가 있다");
 ok(html.includes("폴더에서 읽습니다") || html.includes("폴더에서 직접 읽"),
