@@ -13,8 +13,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Pillow는 손글씨 이미지 마스킹(mask_images.py)에만 필요하다 — 텍스트 경로만
+# 쓰는 교사는 없어도 된다. 테스트는 손글씨 경로도 검증하므로 dev에 포함한다.
+handwriting = [
+    "Pillow",
+]
 dev = [
     "pytest",
+    "Pillow",
 ]
 
 [tool.pytest.ini_options]
