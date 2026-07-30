@@ -13,7 +13,11 @@ import secrets
 import sys
 from pathlib import Path
 
-STUDENT_ID = re.compile(r"\b\d{5}\b")
+# 4자리(중학교 일반)~6자리(일부 학교) 학번을 모두 받는다. 5자리 하드코딩은
+# 다른 학번 체계 학교에서 점수·메모 수집을 통째로 실패시켰다(엣지 실측).
+STUDENT_ID = re.compile(r"\b\d{4,6}\b")
+# 이메일 — 로마자 실명이 담긴 채 명렬 치환을 통과하는 유일한 실측 경로.
+EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 # 패턴 경로(헤더 없음) 전용 — 추측이므로 오탐 방지가 우선이라 형식을 엄격히 본다.
 # {2,4} -> {2,8}: 다문화 성명(예: 응우옌티탄흐엉, 7자)을 놓치지 않기 위해 넓혔다.
 # 패턴 경로는 이미 확인필요=True가 붙으므로 사용자 확인으로 오탐을 보완한다.
@@ -114,7 +118,15 @@ def _rows_from_text(path):
     # utf-8-sig: 메모장·PowerShell 5.1 -Encoding utf8 기본값은 UTF-8 BOM을 붙인다.
     # BOM이 있으면 제거하고, 없으면 그대로 읽으므로 항상 안전하다.
     text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
-    return [line.split() for line in text.splitlines() if line.strip()]
+    lines = [l for l in text.splitlines() if l.strip()]
+    # 탭이 있으면 엑셀 복사, 콤마가 있으면 CSV(구글폼 응답 내보내기 등)다.
+    # 공백 split만 하면 콤마 CSV는 한 줄이 한 칸이 되어 명렬이 0명이 된다.
+    if any("\t" in l for l in lines):
+        return [l.split("\t") for l in lines]
+    if any("," in l for l in lines):
+        import csv as _csv
+        return [row for row in _csv.reader(lines) if any(c.strip() for c in row)]
+    return [line.split() for line in lines]
 
 
 def _find_header_indices(rows):
@@ -621,6 +633,12 @@ def pseudonymize_text(text: str, roster: dict, mapping: dict, owner_id=None):
                     warnings.append(f"본문에서 급우 이름(성 제외) '{given}'을 급우로 치환함(학번 {sid}, {count2}회)")
                 else:
                     warnings.append(f"본문에서 미제출자 급우 이름(성 제외) '{given}'을 급우로 치환함")
+
+    # 이메일 주소 — 구글폼 응답 등에 로마자 실명이 담긴 채(gasang.kim@…) 따라와
+    # 명렬 기반 치환을 그대로 통과해 LLM에 새는 경로가 실측됐다. 통째로 가린다.
+    out, mail_count = EMAIL_PATTERN.subn("[메일]", out)
+    if mail_count > 0:
+        warnings.append(f"본문에서 이메일 주소 {mail_count}건을 가림")
     return out, warnings
 
 
@@ -670,6 +688,10 @@ def scan_leak(text: str, roster: dict, scope: str = "구조"):
             given = name[1:]
             if _given_name_suffix_pattern(given).search(text):
                 issues.append(("WARN", "NAME_LEAK", f"성 제외 이름 '{given}' 노출({scope})"))
+    # 이메일 — 로마자 실명이 든 채 명렬 치환을 통과하는 실측 경로. 치환이 먼저
+    # 막지만, 검사 없이 치환만 있으면 게이트가 새는 셈이라 여기서도 잡는다.
+    if EMAIL_PATTERN.search(text):
+        issues.append(("FAIL", "EMAIL_LEAK", f"이메일 주소 노출({scope})"))
     return issues
 
 
@@ -2806,6 +2828,14 @@ def build_review_bundle(drafts: dict, mapping: dict, sources: dict | None = None
                 본문 = source_by_token.get(token, "") if token else ""
                 if 본문:
                     entry["원문"] = reidentify(본문, mapping)
+
+            # 근거 짝 — 생성 루프가 초안에 실어 둔 짝 데이터를 화면까지 흘려보낸다.
+            # 이걸 싣지 않으면 검수 화면의 짝 표시(이 도구의 핵심 장치)가 실전에서
+            # 항상 0명이 된다(엣지 실측 — 리허설의 짝은 수동 주입이었다).
+            if s.get("짝"):
+                entry["짝"] = s["짝"]
+            if s.get("짝없음"):
+                entry["짝없음"] = s["짝없음"]
 
             entry["우선검토"] = reasons
             students_out.append(entry)

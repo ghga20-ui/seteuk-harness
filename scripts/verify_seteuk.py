@@ -80,16 +80,28 @@ def check_text(text: str, profile: dict, exempt: bool = False, rules: dict | Non
     """단일 세특 본문을 검사한다. 반환: (utf8 바이트수, [(레벨, 코드, 메시지)])."""
     if rules is None:
         rules = RULES
+    # 활동프로파일이 같은 이름의 규칙 키를 갖고 있으면 그 활동에 한해 우선한다.
+    # 규칙 파일은 전역 하나뿐이라, 수학처럼 부등호가 필요한 과목이 국어 규칙까지
+    # 바꿔야 하는 문제가 있었다 — 과목·활동별 차이는 프로파일에 싣는다.
+    for key in ("금지어휘", "금지문자패턴", "이는_경계검사"):
+        if key in profile:
+            rules = {**rules, key: profile[key]}
     issues: list[tuple[str, str, str]] = []
     nbytes = len(text.encode("utf-8"))
 
+    # 문두는 교사가 인터뷰에서 확정한 값이므로 그 구간은 금지 검사에서 면제한다.
+    # 활동명에 가운뎃점('시·소설 비교')이 있으면 문두 강제와 금지문자 검사가
+    # 서로 물려 어느 쪽으로 써도 FAIL이 되는 교착이 있었다 — 검사는 본문에만 건다.
+    prefix = profile.get("문두", "")
+    scanned = text[len(prefix):] if (prefix and text.startswith(prefix)) else text
+
     for word in rules.get("금지어휘", []):
-        if word in text:
+        if word in scanned:
             issues.append(("FAIL", "BANNED_WORD", f"금지 어휘 '{word}' 포함"))
-    if rules.get("이는_경계검사", True) and INEUN.search(text):
+    if rules.get("이는_경계검사", True) and INEUN.search(scanned):
         issues.append(("FAIL", "BANNED_WORD", "금지 어휘 '이는' 포함"))
 
-    match = re.search(rules.get("금지문자패턴", DEFAULT_RULES["금지문자패턴"]), text)
+    match = re.search(rules.get("금지문자패턴", DEFAULT_RULES["금지문자패턴"]), scanned)
     if match:
         issues.append(("FAIL", "BANNED_CHAR", f"금지 특수문자 '{match.group()}' 포함"))
 
@@ -102,7 +114,6 @@ def check_text(text: str, profile: dict, exempt: bool = False, rules: dict | Non
         issues.append(("WARN", "BYTE_UNDER", f"{nbytes}바이트로 목표 {target}에 크게 미달"))
 
     if not exempt:
-        prefix = profile.get("문두", "")
         if prefix and not text.startswith(prefix):
             issues.append(("FAIL", "OPENING", f"문두가 '{prefix}'로 시작하지 않음"))
 
@@ -207,10 +218,15 @@ def verify_drafts(drafts: dict, profile: dict, roster: dict | None = None,
         for student in cls.get("students", []):
             sid = str(student.get("학번", ""))
             sname = student.get("이름", "")
-            seen_ids.add(sid)
             text = student.get("세특", "")
             exempt = bool(student.get("예외", False))
             nbytes, issues = check_text(text, profile, exempt=exempt)
+            if sid and sid in seen_ids:
+                # 같은 학번이 두 반에 있으면 오귀속이 확정적으로 일어난다 —
+                # 명렬 오인(출석번호를 학번으로) 또는 반 중복 편성 흔적이므로 막는다.
+                issues.append(("FAIL", "DUP_ID",
+                               f"학번 {sid}이 초안에 두 번 이상 등장 — 오귀속 의심, 명렬을 확인하세요"))
+            seen_ids.add(sid)
             for name in find_name_intrusions(text, names):
                 issues.append(("FAIL", "NAME", "학생 이름이 본문에 혼입됨"))
 
