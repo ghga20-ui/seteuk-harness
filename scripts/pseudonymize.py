@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import sys
@@ -1494,9 +1495,11 @@ SENSITIVE_GLOBS = ("매핑*.json", "명렬*.json", "관찰메모*.json", "점수
 
 
 def save_mapping(mapping: dict, path) -> None:
-    """매핑표를 로컬에 저장한다. 이 파일은 가명처리의 '추가 정보'이므로 로컬 전용이다."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(mapping, f, ensure_ascii=False, indent=1)
+    """매핑표를 로컬에 저장한다. 이 파일은 가명처리의 '추가 정보'이므로 로컬 전용이다.
+
+    깨지면 복구 불가(토큰↔실명 대응이 사라진다)이므로 원자적으로 쓴다.
+    """
+    _write_json(mapping, path)
 
 
 def load_mapping(path):
@@ -1843,8 +1846,19 @@ def _read_json(path):
 
 
 def _write_json(obj, path) -> None:
-    with open(path, "w", encoding="utf-8") as f:
+    """임시 파일에 쓰고 원자적으로 교체한다.
+
+    절단 쓰기(open "w")는 쓰는 도중 죽으면 파일을 반쯤 남긴다. 매핑표가 그렇게
+    깨지면 토큰을 실명으로 되돌릴 방법이 사라져 그 활동의 산출물이 통째로
+    쓸모없어진다 — 되돌릴 수 없는 손실이라 원자적 저장이 맞다.
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def _apply_roster_profile(input_path, profile_path, roster) -> int:
