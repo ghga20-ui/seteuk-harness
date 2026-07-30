@@ -229,22 +229,24 @@ def _run_cli(tmp_path, drafts, profile=PROFILE, roster=None, save=False):
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
 
 
-def test_missing_submission_stdout_has_no_name_but_has_id(tmp_path):
-    """미제출 보고에는 학번만 있고 이름은 없어야 한다(적대적 감사 FINDING 1)."""
+def test_missing_submission_stdout_has_no_name_and_no_id(tmp_path):
+    """미제출 보고에는 이름은 물론 학번도 나오면 안 된다(stdout 비식별화) — 건수만."""
     roster = {"students": [{"학번": "10101", "이름": "김가상"}, {"학번": "30103", "이름": "최유진"}]}
     proc = _run_cli(tmp_path, make_drafts(), roster=roster)
     assert proc.returncode == 0
-    assert "미제출 30103" in proc.stdout
+    assert "미제출 1명" in proc.stdout
+    assert "30103" not in proc.stdout
     assert "최유진" not in proc.stdout
 
 
-def test_roster_mismatch_stdout_has_no_names(tmp_path):
-    """명렬 불일치 보고에는 두 이름 모두 stdout에 나오면 안 된다(적대적 감사 FINDING 1)."""
+def test_roster_mismatch_stdout_has_no_names_and_no_ids(tmp_path):
+    """명렬 불일치 보고에는 이름·학번 모두 stdout에 나오면 안 된다(코드 집계만)."""
     roster = {"students": [{"학번": "10101", "이름": "김가상"}]}
     drafts = make_drafts()
     drafts["classes"][0]["students"][0]["이름"] = "김거짓"
     proc = _run_cli(tmp_path, drafts, roster=roster)
-    assert "학번 10101" in proc.stdout
+    assert "ROSTER" in proc.stdout
+    assert "10101" not in proc.stdout
     assert "김가상" not in proc.stdout
     assert "김거짓" not in proc.stdout
 

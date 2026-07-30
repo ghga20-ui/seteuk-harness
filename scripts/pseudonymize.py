@@ -1845,16 +1845,35 @@ def _read_json(path):
         return json.load(f)
 
 
+def _open_private(path):
+    """민감 파일을 소유자 전용 권한(0o600)으로 만들어 여는 텍스트 쓰기 헬퍼.
+
+    일반 open(..., "w")은 POSIX(macOS/Linux)에서 umask 기본값 기준 0644가 되어
+    같은 컴퓨터의 다른 계정이 명렬·매핑표를 읽을 수 있다. os.open에 0o600을
+    직접 주면 파일이 생기는 순간부터 소유자만 읽고 쓴다. Windows에서는 mode
+    비트가 무시되지만 사용자 프로필 폴더의 ACL이 이미 계정별로 보호하므로
+    그대로 두면 된다. O_CREAT의 mode는 새로 만들 때만 적용되고 기존 파일은
+    기존 권한을 유지하므로, 민감 산출물은 항상 이 헬퍼로 처음부터 만들어야
+    한다 — _write_json은 매번 새 임시 파일에 쓰므로 이 조건이 저절로 성립한다.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
 def _write_json(obj, path) -> None:
     """임시 파일에 쓰고 원자적으로 교체한다.
 
     절단 쓰기(open "w")는 쓰는 도중 죽으면 파일을 반쯤 남긴다. 매핑표가 그렇게
     깨지면 토큰을 실명으로 되돌릴 방법이 사라져 그 활동의 산출물이 통째로
     쓸모없어진다 — 되돌릴 수 없는 손실이라 원자적 저장이 맞다.
+
+    임시 파일은 _open_private로 0o600으로 만든다 — os.replace는 임시 파일의
+    권한을 그대로 넘기므로 최종 파일도 0o600이 된다(예전에 0644로 만들어진
+    파일도 다시 쓰는 순간 좁혀진다).
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
+    with _open_private(tmp) as f:
         json.dump(obj, f, ensure_ascii=False, indent=1)
         f.flush()
         os.fsync(f.fileno())
@@ -2678,7 +2697,9 @@ def _cmd_confirm_html(args) -> int:
         return 1
 
     mapping = _read_json(args.mapping) if args.mapping else None
-    out.write_text(_build_confirm_html(roster, mapping), encoding="utf-8")
+    # 실명 화면이므로 생성 순간부터 소유자 전용 권한으로 쓴다(_open_private).
+    with _open_private(out) as f:
+        f.write(_build_confirm_html(roster, mapping))
     print(f"확인 화면을 만들었습니다: {len(students)}명. 브라우저로 열어 훑어보기만 하면 됩니다. 저장: {args.out}")
     print("주의: 이 파일은 실명을 담은 보기용 화면입니다 — 확인이 끝나면 destroy로 파기하세요.")
     return 0

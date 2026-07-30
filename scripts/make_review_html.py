@@ -19,6 +19,12 @@ import json
 import sys
 from pathlib import Path
 
+# 검수.html은 실명을 담으므로 생성 순간부터 소유자 전용 권한(0o600)으로 쓴다.
+# 같은 scripts/ 폴더의 pseudonymize에 있는 헬퍼를 그대로 쓴다 — 스크립트로
+# 실행하면 sys.path[0]이 scripts/라 바로 import된다(verify_seteuk과 같은 방식).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pseudonymize import _open_private
+
 MARKER = "__검수데이터__"
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / "tools" / "검수템플릿.html"
 
@@ -79,7 +85,8 @@ def main(argv=None) -> int:
 
     html = build_html(template, bundle)
     out_path = Path(args.out) if args.out else bundle_path.parent / "검수.html"
-    out_path.write_text(html, encoding="utf-8")
+    with _open_private(out_path) as f:
+        f.write(html)
 
     n = len(students)
     priority = sum(1 for s in students if s.get("우선검토"))

@@ -36,7 +36,7 @@ Claude Code에서는 하네스가 자동으로 지켜 주던 것을, 이 환경�
 - `review-bundle` — 검수용 번들 생성(실명 산출물, 로컬 전용).
 - `destroy` — 매핑·명렬·토큰본 등 중간 산출물 파기(먼저 목록 확인 후 `--yes`).
 
-저장/검증은 `scripts/verify_seteuk.py <초안.json> --profile … --roster … --save …`(FAIL이면 저장 차단). 손글씨 이미지 마스킹만 예외적으로 `mask_images.py` 함수 직접 호출이며, 실적용을 검증하는 기계 게이트가 없어 전송 직전 교사 육안 확인이 필수입니다.
+저장/검증은 `scripts/verify_seteuk.py <초안.json> --profile … --roster … --mapping … --save …`(FAIL이면 저장 차단). 검증기는 초안의 학생 키(`토큰`/`학번`)로 단계를 판별한다 — 토큰 단계(finalize 전)는 텍스트 검사만 하며 `--roster`·`--save`를 거부하고, 실명 단계의 stdout은 학번 대신 토큰(매핑 제공 시) 또는 코드별 집계만 표시한다. 손글씨 이미지 마스킹만 예외적으로 `mask_images.py` 함수 직접 호출이며, 실적용을 검증하는 기계 게이트가 없어 전송 직전 교사 육안 확인이 필수입니다.
 
 ## 4. 미검증 고지(정직하게)
 
