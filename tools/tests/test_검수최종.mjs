@@ -178,13 +178,25 @@ T.REVIEW.load(BUNDLE());
      "수정 없이 메모만 있어도 잡힌다");
 }
 
-// ── 2단계 저장 게이트 ──────────────────────────────────────────
-T.REVIEW.load(BUNDLE());
-ok(T.REVIEW.canSaveLocal() === false, "AI용을 저장하기 전에는 실명 저장이 닫혀 있다");
+// ── 저장 한 번, 순서는 코드가 ─────────────────────────────────
+// 1단계/2단계 의식은 올리기 시절의 잔재라 걷어냈다. 남는 계약은 둘이다:
+// 상태 표시가 저장 여부를 정확히 말할 것, 저장 표시 함수가 살아 있을 것
+// (핸들러가 diff→검수본 순서로 부른다 — 중간에 멈춰도 실명만 남지 않는다).
+ok(T.REVIEW.canSaveLocal() === false, "로드 직후에는 저장 전 상태다");
 T.REVIEW.markAiSaved();
-ok(T.REVIEW.canSaveLocal() === true, "AI용을 저장하면 실명 저장이 열린다");
+ok(T.REVIEW.canSaveLocal() === true, "고침 기록 저장이 상태에 기록된다");
 T.REVIEW.load(BUNDLE());
-ok(T.REVIEW.canSaveLocal() === false, "다시 로드하면 게이트가 다시 닫힌다");
+ok(T.REVIEW.canSaveLocal() === false, "다시 로드하면 저장 전 상태로 돌아간다");
+{
+  const html = readFileSync(new URL("../검수템플릿.html", import.meta.url), "utf-8");
+  ok(!html.includes("btn-save-ai") && !html.includes("btn-save-local"),
+     "저장 버튼이 하나다(1단계/2단계 버튼 없음)");
+  ok(!html.includes("AI에게 주는 것") && !html.includes("1단계"),
+     "역할 상자 의식이 화면에서 사라졌다");
+  const iDiff = html.indexOf('saveFile("검수diff(AI용).json"');
+  const iBon = html.indexOf('saveFile("검수본(실명·보관용).json"');
+  ok(iDiff >= 0 && iBon > iDiff, "코드가 고침 기록을 검수본보다 먼저 저장한다");
+}
 
 // ── 미저장 수정 감지 (beforeunload 조건) ────────────────────────
 T.REVIEW.load(BUNDLE());
@@ -204,7 +216,7 @@ ok(T.REVIEW.isDirty() === false, "로드 직후에는 미저장 수정이 없다
      "확정 문구 1(좌우 안내)이 있다");
   ok(html.includes("①② 같은 번호가 붙은 두 곳은 같은 내용입니다."),
      "확정 문구 2(짝 안내)가 있다");
-  ok(html.includes("저장은 두 번 누릅니다."), "확정 문구 3(2단계 저장)이 있다");
+  ok(html.includes("저장을 누르면 파일 두 개가 활동 폴더에 생깁니다"), "확정 문구 3(저장 한 번)이 있다");
   ok(html.includes("학생 실명이 있는 화면입니다 — 화면을 공유하거나 자리를 비울 때 닫아 주세요."),
      "확정 문구 4(상단 실명 경고)가 있다");
   ok(html.includes("원문 ①과 짝지었습니다 — 맞는지 봐 주세요") ||
