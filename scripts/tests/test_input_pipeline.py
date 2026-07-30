@@ -302,7 +302,7 @@ def test_confirm_html_contains_all_students_but_stdout_is_masked(tmp_path):
         assert s["학번"] in html
     # 안내 문구
     assert "명단이 맞는지 훑어보세요" in html
-    assert "이름은 치지 마시고" in html
+    assert "이름은 치지 마세요" in html
     # JS 없음
     assert "<script" not in html.lower()
     # stdout/stderr에는 실명·학번이 절대 없다

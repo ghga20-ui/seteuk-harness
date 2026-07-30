@@ -2544,8 +2544,9 @@ def _cmd_detect(args) -> int:
 
 
 CONFIRM_HTML_NOTICE = (
-    "명단이 맞는지 훑어보세요. 이 파일은 보기용입니다 — 고칠 것이 있으면 대화창에 "
-    "말씀해 주세요(이름은 치지 마시고 '3번째 학생 이름이 달라요' 식으로)."
+    "명단이 맞는지 훑어보세요. 고칠 것이 있으면 대화창에 "
+    "'3번째 학생 이름이 달라요' 식으로 말씀해 주세요 — 이름은 치지 마세요. "
+    "확인이 끝나면 이 파일은 지워도 됩니다 — 대화창에 말씀하시면 제가 지웁니다."
 )
 
 
@@ -2563,8 +2564,9 @@ def _build_confirm_html(roster: dict, mapping: dict | None = None) -> str:
     if token_map is not None:
         header_cells += "<th>제출 여부</th>"
 
+    students = roster.get("students", [])
     body_rows = []
-    for i, s in enumerate(roster.get("students", []), start=1):
+    for i, s in enumerate(students, start=1):
         sid = str(s.get("학번", ""))
         cells = [
             f"<td>{i}</td>",
@@ -2575,6 +2577,16 @@ def _build_confirm_html(roster: dict, mapping: dict | None = None) -> str:
             cells.append(f"<td>{'제출' if sid in token_map else '미제출'}</td>")
         body_rows.append("      <tr>" + "".join(cells) + "</tr>")
 
+    # 명단 확인의 첫 판정은 '수가 맞나'다 — 합계를 세는 일은 화면이 맡는다.
+    n = len(students)
+    if token_map is not None:
+        submitted = sum(
+            1 for s in students if str(s.get("학번", "")) in token_map
+        )
+        total_line = f"모두 {n}명 — 제출 {submitted}명, 미제출 {n - submitted}명입니다."
+    else:
+        total_line = f"모두 {n}명입니다 — 반 명렬과 수가 같은지 먼저 봐 주세요."
+
     rows_html = "\n".join(body_rows)
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -2582,17 +2594,26 @@ def _build_confirm_html(roster: dict, mapping: dict | None = None) -> str:
 <meta charset="utf-8">
 <title>명단 확인</title>
 <style>
+  :root {{ color-scheme: light dark; }}
   body {{ background: #ffffff; color: #1a1a1a; font-family: "Malgun Gothic", sans-serif;
          margin: 2rem auto; max-width: 40rem; padding: 0 1rem; }}
-  p.안내 {{ background: #f5f2ea; border: 1px solid #ddd6c7; padding: 0.8rem 1rem; }}
+  p.안내 {{ background: #eef1f4; border: 1px solid #c8cfd6; padding: 0.8rem 1rem; }}
+  p.합계 {{ font-weight: 700; margin-top: 1rem; }}
   table {{ border-collapse: collapse; width: 100%; margin-top: 1rem; }}
-  th, td {{ border: 1px solid #d0d0d0; padding: 0.35rem 0.6rem; text-align: left; }}
-  th {{ background: #f0f0f0; }}
+  th, td {{ border: 0; border-bottom: 1px solid #e2e5e9; padding: 0.5rem 0.6rem; text-align: left; }}
+  th {{ font-weight: 700; border-bottom-color: #848d96; background: transparent; }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ background: #171c22; color: #e8ecf0; }}
+    p.안내 {{ background: #10151a; border-color: #333c45; }}
+    th, td {{ border-bottom-color: #333c45; }}
+    th {{ border-bottom-color: #6e7883; }}
+  }}
 </style>
 </head>
 <body>
   <h1>명단 확인</h1>
   <p class="안내">{CONFIRM_HTML_NOTICE}</p>
+  <p class="합계">{total_line}</p>
   <table>
     <thead><tr>{header_cells}</tr></thead>
     <tbody>
