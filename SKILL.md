@@ -31,6 +31,7 @@ description: 수행평가 학생 원본(xlsx, hwpx, pdf, 사진 등 학생의 �
 # 실행 전 점검 (환경 자동 준비)
 사용자에게 설치를 미루지 말고 스킬이 직접 환경을 준비한다. 사용자는 권한 승인만 하면 된다.
 
+0. **업데이트 확인**: 스킬 폴더에서 `git fetch` 후 로컬이 원격보다 뒤처져 있으면(`git rev-list HEAD..origin/master --count`가 0이 아니면) 사용자에게 한 줄로 알리고 받을지 묻는다: "스킬에 새 버전이 있습니다(수정 N건). 받을까요?" — 승인 시 `git pull`. 교사의 개인 축적물(`wiki/성장/`·활동이력)은 git 밖이라 업데이트로 덮이지 않는다. 네트워크가 없거나 fetch가 실패하면 조용히 건너뛴다(차단 금지). **묻지 않고 pull하지 않는다** — 작업 직전에 동작이 바뀌면 교사가 혼란스럽다
 1. 파이썬 탐지: `python --version`이 실패하면 `py --version`, `python3 --version`을 차례로 시도한다. 성공한 명령을 이 세션의 파이썬 명령으로 삼는다(이후 모든 스크립트 실행에 사용)
 2. 파이썬이 없으면 사용자에게 한 줄로 알리고 직접 설치한다:
    - Windows: `winget install -e --id Python.Python.3.12` (winget이 없으면 Microsoft Store의 Python 설치를 안내)
