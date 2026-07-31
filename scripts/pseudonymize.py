@@ -1852,11 +1852,14 @@ def _open_private(path):
     같은 컴퓨터의 다른 계정이 명렬·매핑표를 읽을 수 있다. os.open에 0o600을
     직접 주면 파일이 생기는 순간부터 소유자만 읽고 쓴다. Windows에서는 mode
     비트가 무시되지만 사용자 프로필 폴더의 ACL이 이미 계정별로 보호하므로
-    그대로 두면 된다. O_CREAT의 mode는 새로 만들 때만 적용되고 기존 파일은
-    기존 권한을 유지하므로, 민감 산출물은 항상 이 헬퍼로 처음부터 만들어야
-    한다 — _write_json은 매번 새 임시 파일에 쓰므로 이 조건이 저절로 성립한다.
+    그대로 두면 된다. O_CREAT의 mode는 신규 생성에만 적용되므로 — 구버전이
+    0644로 만든 확인.html을 다시 쓰거나, 크래시가 남긴 0644짜리 .tmp 잔재를
+    _write_json이 재사용하는 경우 — 기존 파일·잔존 tmp의 낡은 권한을 열린
+    fd에 대한 fchmod로 0o600으로 좁힌다(Windows엔 fchmod가 없어 건너뛴다).
     """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)
     return os.fdopen(fd, "w", encoding="utf-8")
 
 

@@ -22,6 +22,12 @@ DEFAULT_RULES = {
 RULES_PATH = Path(__file__).resolve().parent.parent / "wiki" / "규칙.json"
 INEUN = re.compile(r"(?:^|[ ,.'])이는(?=[ ,.]|$)")
 
+# 정상 토큰 형식 — pseudonymize.py issue_tokens()가 "S-" + secrets.token_hex(2)
+# .upper()로 발급하는 S-XXXX(16진 4자리)와 같은 모양이다. pseudonymize.py의
+# TOKEN_PATTERN은 본문 잔존 스캔용 search 패턴이라 앞뒤 룩어라운드가 붙어
+# 있어, "값 전체가 토큰인가"를 묻는 fullmatch에는 그대로 쓸 수 없다.
+TOKEN_FORMAT = re.compile(r"S-[0-9A-Fa-f]{4}\Z")
+
 
 def load_rules(path=RULES_PATH) -> dict:
     """규칙 파일을 읽어 기본값 위에 덮는다. 실패하면 기본값을 반환한다."""
@@ -317,25 +323,59 @@ def detect_stage(drafts: dict) -> str:
 def verify_token_drafts(drafts: dict, profile: dict) -> dict:
     """토큰 초안(§6)을 검사한다. 식별자가 토큰뿐이라 stdout에 그대로 찍어도 안전하다.
 
-    수행: check_text 전체(바이트·문두·금지어 등), 토큰 잔존(자기 토큰 포함 —
+    단, "토큰뿐"은 값이 정말 토큰(S-XXXX)일 때만 참이다. detect_stage는 키의
+    존재만 보고 값은 보지 않으므로, 빈 값이나 학번 형태 값("30101")이 여기까지
+    온다 — 그 값을 행별 출력에 찍으면 이 검증기 자체가 유출 경로가 된다.
+    그래서 본 검사 전에 전 학생의 토큰 값을 선검증하고, 형식 위반 학생은 값
+    대신 위치(반 이름 + 반 내 순번)로만 식별한다(row["표시"]). 위반 값은 차단
+    메시지에도 되뱉지 않고 rows에도 싣지 않는다.
+
+    수행: 선검증(TOKEN_INVALID — 토큰 값 형식, PRIVACY_FIELD — 실명 키 혼입),
+    check_text 전체(바이트·문두·금지어 등), 토큰 잔존(자기 토큰 포함 —
     본문에 남은 토큰은 finalize에서 학번으로 복원되어 그대로 노출된다),
-    중복 토큰(DUP_TOKEN — 같은 토큰이 두 학생에게 붙었으면 오귀속 확정).
+    중복 토큰(DUP_TOKEN — 같은 토큰이 두 학생에게 붙었으면 오귀속 확정.
+    형식이 유효한 토큰끼리만 본다 — 빈 값끼리의 "중복"은 TOKEN_INVALID의 몫).
     건너뜀: 이름 혼입·명렬 대조·미제출 감지 — 초안에 이름·학번이 없어 검사
     자체가 성립하지 않는다. finalize 후 실명 단계(§7)에서 수행한다.
     """
+    # ── 선검증: 본 검사 전에 전 학생의 토큰 "값"과 실명 키를 훑는다 ──
+    pre: dict[tuple[int, int], list[tuple[str, str, str]]] = {}
+    invalid: set[tuple[int, int]] = set()
+    for ci, cls in enumerate(drafts.get("classes", [])):
+        for si, student in enumerate(cls.get("students", [])):
+            issues: list[tuple[str, str, str]] = []
+            if not TOKEN_FORMAT.fullmatch(str(student.get("토큰", ""))):
+                invalid.add((ci, si))
+                issues.append(("FAIL", "TOKEN_INVALID",
+                               "토큰 형식 위반(빈 값 또는 S-XXXX 아님) — "
+                               "가명화 산출물에서 초안을 다시 만드세요"))
+            # "학번" 동시 보유는 CLI에서는 STAGE_MIXED가 먼저 잡지만, 이 함수를
+            # 직접 부르는 경로를 위해 여기서도 막는다. 어느 쪽이든 값은 안 찍는다.
+            if "이름" in student or "학번" in student:
+                issues.append(("FAIL", "PRIVACY_FIELD",
+                               "토큰 단계 초안에 실명 키(이름/학번)가 들어 있음 — "
+                               "해당 키를 제거하세요"))
+            if issues:
+                pre[(ci, si)] = issues
+
+    # ── 본 검사 ──
     rows = []
     fail = warn = 0
     seen_tokens: set[str] = set()
-    for cls in drafts.get("classes", []):
-        for student in cls.get("students", []):
+    for ci, cls in enumerate(drafts.get("classes", [])):
+        for si, student in enumerate(cls.get("students", [])):
             token = str(student.get("토큰", ""))
             text = student.get("세특", "")
             exempt = bool(student.get("예외", False))
             nbytes, issues = check_text(text, profile, exempt=exempt)
-            if token and token in seen_tokens:
-                issues.append(("FAIL", "DUP_TOKEN",
-                               "같은 토큰이 초안에 두 번 이상 등장 — 오귀속 의심, 매핑·초안을 확인하세요"))
-            seen_tokens.add(token)
+            issues = pre.get((ci, si), []) + issues
+            # DUP_TOKEN은 형식이 유효한 토큰끼리만 본다 — 오염 값을 집합에 넣는
+            # 것 자체가 비교·출력 경로를 만들고, 그 중복은 TOKEN_INVALID가 잡는다.
+            if (ci, si) not in invalid:
+                if token in seen_tokens:
+                    issues.append(("FAIL", "DUP_TOKEN",
+                                   "같은 토큰이 초안에 두 번 이상 등장 — 오귀속 의심, 매핑·초안을 확인하세요"))
+                seen_tokens.add(token)
 
             # 토큰 잔존 검사 — 자기 토큰도 잡는다. 세특 본문에는 어떤 식별자도
             # 남으면 안 되고, 남은 토큰은 재결합 때 학번 숫자가 되어 노출된다.
@@ -345,12 +385,19 @@ def verify_token_drafts(drafts: dict, profile: dict) -> dict:
 
             fail += sum(1 for lv, _, _ in issues if lv == "FAIL")
             warn += sum(1 for lv, _, _ in issues if lv == "WARN")
-            rows.append({"반": cls.get("name", ""), "토큰": token, "바이트": nbytes, "issues": issues})
+            # 표시: 행별 출력용 식별자. 선검증 위반 학생은 위치로만 부르고,
+            # 형식 위반 토큰 값은 rows에도 싣지 않는다(하류 어디서도 못 찍게).
+            display = token if (ci, si) not in pre else f"{si + 1}번째 학생"
+            rows.append({"반": cls.get("name", ""), "토큰": token if (ci, si) not in invalid else "",
+                         "표시": display, "바이트": nbytes, "issues": issues})
     return {"rows": rows, "fail": fail, "warn": warn}
 
 
-def save_xlsx(drafts: dict, report: dict, out_path: str) -> None:
+def save_xlsx(drafts: dict, report: dict, out_path) -> None:
     """검증 보고서와 함께 반별 시트로 저장한다. 호출 전 FAIL 0을 보장할 것.
+
+    out_path는 경로 문자열 또는 바이너리 쓰기 파일 객체(openpyxl이 둘 다
+    지원한다) — main()은 0o600으로 미리 연 파일 객체를 넘겨 권한을 통제한다.
 
     바이트수 열은 정적 값이 아니라 엑셀 수식으로 넣는다 — 교사가 검수 중
     세특을 고치면 바이트가 실시간으로 재계산되어 분량 조절이 수월하다.
@@ -452,8 +499,10 @@ def main(argv=None) -> int:
     if stage == "token":
         report = verify_token_drafts(drafts, profile)
         for row in report["rows"]:
+            # 표시는 유효 토큰이거나 "N번째 학생"(선검증 위반)뿐이다 — 형식
+            # 위반 토큰 값은 rows에 없으므로 이 줄로는 절대 나갈 수 없다.
             for level, code, msg in row["issues"]:
-                print(f"{level} {row['반']} {row['토큰']} [{code}] {msg}")
+                print(f"{level} {row['반']} {row['표시']} [{code}] {msg}")
         print("이름 혼입·명렬 대조·미제출 감지는 실명 단계에서 수행됩니다")
         print(f"결과: FAIL {report['fail']}건, WARN {report['warn']}건")
         if report["fail"] > 0:
@@ -469,9 +518,24 @@ def main(argv=None) -> int:
     if args.submitted:
         submitted = load_submitted_ids(args.submitted)
     token_map = None
+    mapping_invalid = mapping_dup = 0
     if args.mapping:
         with open(args.mapping, encoding="utf-8-sig") as f:
-            token_map = {str(sid): tok for sid, tok in (json.load(f).get("map") or {}).items()}
+            raw_map = json.load(f).get("map") or {}
+        # 매핑의 "값"도 신뢰하지 않는다 — 손상된 매핑의 값이 학번이면 아래
+        # 행별 출력이 그대로 유출 경로가 된다. 형식 위반 값은 token_map에
+        # 싣지 않고(되뱉지도 않고) 개수만 세어 FAIL로 집계한다. 같은 토큰
+        # 값이 두 학번에 걸린 중복도 재결합 오귀속 확정이므로 같이 센다.
+        token_map = {}
+        token_seen: dict[str, int] = {}
+        for sid, tok in raw_map.items():
+            tok = str(tok)
+            if not TOKEN_FORMAT.fullmatch(tok):
+                mapping_invalid += 1
+                continue
+            token_seen[tok] = token_seen.get(tok, 0) + 1
+            token_map[str(sid)] = tok
+        mapping_dup = sum(n - 1 for n in token_seen.values() if n > 1)
 
     if roster is not None:
         # 이 문구는 ROSTER 대조가 오귀속을 증명하지 못한다는 사실을 매 실행마다
@@ -481,6 +545,18 @@ def main(argv=None) -> int:
 
     report = verify_drafts(drafts, profile, roster=roster, submitted=submitted)
 
+    # 매핑 값 검증 결과는 행별 출력보다 먼저 알린다 — 번역된 행을 읽기 전에
+    # 번역 자체를 못 믿는다는 사실이 stdout에 있어야 한다. FAIL 총계에 넣어
+    # 저장 게이트에도 걸리게 한다(위반 값 자체는 어디에도 찍지 않는다).
+    if mapping_invalid:
+        print(f"FAIL [MAPPING_INVALID] 매핑에 형식 위반 토큰 {mapping_invalid}건 — "
+              "매핑 파일 손상 의심, issue로 다시 발급하세요")
+        report["fail"] += mapping_invalid
+    if mapping_dup:
+        print(f"FAIL [MAPPING_DUP] 같은 토큰 값이 여러 학번에 걸림 {mapping_dup}건 — "
+              "매핑 파일 손상 의심, issue로 다시 발급하세요")
+        report["fail"] += mapping_dup
+
     # 실명 단계 stdout 비식별화 — 이 스크립트의 stdout은 에이전트(LLM)가 읽는
     # 유일한 창구라, 학번이 어떤 형태로도 나가면 개인정보 계약 위반이다.
     # 매핑이 있으면 행별 식별자를 학번→토큰으로 번역해 찍고, 없으면(파기 후
@@ -489,7 +565,8 @@ def main(argv=None) -> int:
         unmapped_rows = 0
         for row in report["rows"]:
             token = token_map.get(str(row["학번"]))
-            if token is None:
+            # 최종 방어선: token_map 구성이 바뀌어도 형식 위반 값은 못 나간다.
+            if token is None or not TOKEN_FORMAT.fullmatch(token):
                 unmapped_rows += 1
                 continue
             for level, code, msg in row["issues"]:
@@ -513,7 +590,8 @@ def main(argv=None) -> int:
     unmapped_missing = 0
     for s in report.get("미제출", []):
         token = (token_map or {}).get(str(s["학번"]))
-        if token:
+        # 행별 출력과 같은 최종 방어선 — 형식이 유효한 토큰만 찍는다.
+        if token and TOKEN_FORMAT.fullmatch(token):
             print(f"미제출 {token} — 원본 없음, 별도 확인 필요")
         else:
             # 미제출자는 토큰이 발급되지 않는 것이 정상이라(issue는 제출자 전용)
@@ -583,7 +661,19 @@ def main(argv=None) -> int:
 
         tmp_path = args.save + ".tmp"
         try:
-            save_xlsx(drafts, report, tmp_path)
+            # 검수 xlsx에는 반 전체의 실명·세특이 들어 있어 명렬·매핑표와 같은
+            # 등급의 민감 산출물이다 — pseudonymize._open_private처럼 생성
+            # 순간부터 0o600을 준다(Windows는 mode를 무시하고 프로필 폴더의
+            # ACL이 맡는다). 크래시가 남긴 헐거운 권한의 .tmp 잔재도 fchmod로
+            # 좁힌다(Windows엔 fchmod가 없어 건너뛴다). fsync 후 os.replace로
+            # 교체하는 원자적 구조는 그대로다.
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                save_xlsx(drafts, report, f)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp_path, args.save)
         except Exception:
             if os.path.exists(tmp_path):

@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import mask_images
 import pseudonymize
 
 SCRIPT = str(Path(__file__).resolve().parents[1] / "pseudonymize.py")
@@ -69,6 +70,18 @@ def test_open_private_mode_is_0600(tmp_path):
     assert _mode(p) == 0o600
 
 
+@posix_only
+def test_open_private_narrows_pre_existing_0644(tmp_path):
+    """O_CREAT의 mode는 신규 생성에만 적용된다 — 구버전이 0644로 남긴 파일을
+    _open_private로 다시 쓰면 fchmod가 낡은 권한을 0o600으로 좁혀야 한다."""
+    p = tmp_path / "확인.html"
+    p.write_text("<html>옛날 실명 화면</html>", encoding="utf-8")
+    os.chmod(p, 0o644)
+    with pseudonymize._open_private(p) as f:
+        f.write("<html>새 화면</html>")
+    assert _mode(p) == 0o600
+
+
 # ---------------------------------------------------------------------------
 # _write_json — 원자적 쓰기 구조가 권한 적용 후에도 살아 있어야 한다
 # ---------------------------------------------------------------------------
@@ -110,6 +123,88 @@ def test_write_json_narrows_pre_existing_0644(tmp_path):
     os.chmod(p, 0o644)
     pseudonymize._write_json({"map": {}}, p)
     assert _mode(p) == 0o600
+
+
+@posix_only
+def test_write_json_narrows_stale_0644_tmp(tmp_path):
+    """크래시가 남긴 0644짜리 `이름.json.tmp` 잔재가 있어도 최종 파일은 0600.
+
+    _write_json은 고정 이름의 임시 파일을 다시 열어 쓰므로(O_CREAT mode는
+    기존 tmp에 적용되지 않는다) fchmod가 없으면 os.replace가 낡은 권한을
+    최종 파일까지 전파한다 — 그 구멍을 여기서 못 박는다.
+    """
+    p = tmp_path / "매핑.json"
+    stale = tmp_path / "매핑.json.tmp"
+    stale.write_text('{"map": {"10101": "S-크래시잔재"}}', encoding="utf-8")
+    os.chmod(stale, 0o644)
+    new = {"map": {"10101": "S-1111"}}
+    pseudonymize._write_json(new, p)
+    assert _mode(p) == 0o600
+    assert json.loads(p.read_text(encoding="utf-8")) == new
+    assert not stale.exists()
+
+
+# ---------------------------------------------------------------------------
+# mask_images — 실명이 든 이미지 사본(마스킹·인적 크롭)도 같은 그물에 걸려야 한다
+# ---------------------------------------------------------------------------
+
+def _make_source_image(tmp_path, name="원본.png"):
+    from PIL import Image
+
+    p = tmp_path / name
+    Image.new("RGB", (100, 100), (255, 255, 255)).save(p)
+    return p
+
+
+@posix_only
+def test_mask_region_output_mode_is_0600(tmp_path):
+    src = _make_source_image(tmp_path)
+    dst = tmp_path / "마스킹.png"
+    mask_images.mask_region(src, dst, (0.0, 0.0, 0.5, 0.2))
+    assert _mode(dst) == 0o600
+
+
+@posix_only
+def test_crop_region_output_mode_is_0600(tmp_path):
+    src = _make_source_image(tmp_path)
+    dst = tmp_path / "인적.png"
+    mask_images.crop_region(src, dst, (0.0, 0.0, 0.5, 0.2))
+    assert _mode(dst) == 0o600
+
+
+@posix_only
+def test_mask_region_narrows_pre_existing_0644(tmp_path):
+    """구버전이 0644로 만든 마스킹 사본을 재생성해도 0600으로 좁혀져야 한다."""
+    src = _make_source_image(tmp_path)
+    dst = tmp_path / "마스킹.png"
+    dst.write_bytes(b"stale")
+    os.chmod(dst, 0o644)
+    mask_images.mask_region(src, dst, (0.0, 0.0, 0.5, 0.2))
+    assert _mode(dst) == 0o600
+
+
+def test_mask_region_fd_save_keeps_image_integrity(tmp_path):
+    """fd 경유 저장(format 명시)이어도 Windows 포함 어디서나 정상 이미지여야 한다."""
+    from PIL import Image
+
+    src = _make_source_image(tmp_path)
+    for name in ("마스킹.png", "마스킹.jpg"):
+        dst = tmp_path / name
+        mask_images.mask_region(src, dst, (0.0, 0.0, 0.5, 0.2))
+        img = Image.open(dst)
+        assert img.size == (100, 100)
+        assert img.getpixel((10, 10))[0] < 40       # 마스킹 영역(JPEG 손실 허용)
+        assert img.getpixel((90, 90))[0] > 200      # 본문 영역은 보존
+
+
+def test_crop_region_fd_save_keeps_image_integrity(tmp_path):
+    from PIL import Image
+
+    src = _make_source_image(tmp_path)
+    for name in ("인적.png", "인적.jpeg"):
+        dst = tmp_path / name
+        mask_images.crop_region(src, dst, (0.0, 0.0, 0.5, 0.2))
+        assert Image.open(dst).size == (50, 20)
 
 
 # ---------------------------------------------------------------------------
