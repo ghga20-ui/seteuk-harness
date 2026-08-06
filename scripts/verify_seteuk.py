@@ -28,6 +28,39 @@ INEUN = re.compile(r"(?:^|[ ,.'])이는(?=[ ,.]|$)")
 # 있어, "값 전체가 토큰인가"를 묻는 fullmatch에는 그대로 쓸 수 없다.
 TOKEN_FORMAT = re.compile(r"S-[0-9A-Fa-f]{4}\Z")
 
+# 원문 표현 차용 검사(소화 원칙) — 작은따옴표 인용(작품명·학생의 핵심 개념어)은 면제
+BORROW_QUOTED = re.compile(r"'[^'\n]{1,40}'")
+BORROW_WINDOW = 8       # 조사만 바꾼 명사구 차용까지 잡히는 창 크기(실측으로 정함)
+BORROW_COV = 0.20       # 커버리지 경고 임계 — 2026-07-31 실측 분포(평균 8%)의 상위 꼬리
+BORROW_RUN = 20         # 최장 연속 차용 경고 임계(자)
+
+
+def borrow_stats(seteuk: str, source: str) -> tuple[float, int]:
+    """세특이 학생 원문의 표현을 그대로 옮긴 정도를 잰다.
+
+    근거 규칙("원문에 없는 내용 금지")은 내용 차원의 규칙인데, 생성기가 이를
+    표현 차원까지 과잉 적용하면 학생 문구에 붙은 어색한 세특이 나온다.
+    공백을 뗀 두 문자열에서 8자 창이 원문에 그대로 존재하는 비율(커버리지)과
+    최장 연속 차용 길이를 돌려준다. 작은따옴표 안(의도적 인용)은 재기 전에
+    제거한다. 축자 인용(12자+)은 실측상 드물었고(평균 2%), 문제는 8자 수준
+    구절 차용이었다(평균 8%, 최대 31%).
+    """
+    a = "".join(BORROW_QUOTED.sub("", seteuk).split())
+    b = "".join(source.split())
+    w = BORROW_WINDOW
+    if len(a) < w or not b:
+        return 0.0, 0
+    covered = [False] * len(a)
+    for i in range(len(a) - w + 1):
+        if a[i:i + w] in b:
+            for j in range(i, i + w):
+                covered[j] = True
+    longest = cur = 0
+    for hit in covered:
+        cur = cur + 1 if hit else 0
+        longest = max(longest, cur)
+    return sum(covered) / len(a), longest
+
 
 def load_rules(path=RULES_PATH) -> dict:
     """규칙 파일을 읽어 기본값 위에 덮는다. 실패하면 기본값을 반환한다."""
@@ -320,7 +353,8 @@ def detect_stage(drafts: dict) -> str:
     return kinds.pop()
 
 
-def verify_token_drafts(drafts: dict, profile: dict) -> dict:
+def verify_token_drafts(drafts: dict, profile: dict,
+                        sources: dict[str, str] | None = None) -> dict:
     """토큰 초안(§6)을 검사한다. 식별자가 토큰뿐이라 stdout에 그대로 찍어도 안전하다.
 
     단, "토큰뿐"은 값이 정말 토큰(S-XXXX)일 때만 참이다. detect_stage는 키의
@@ -382,6 +416,18 @@ def verify_token_drafts(drafts: dict, profile: dict) -> dict:
             from pseudonymize import scan_token_residue
             for residue in scan_token_residue(text):
                 issues.append(("FAIL", "TOKEN_RESIDUE", f"토큰 '{residue}'이 세특 본문에 남아 있음"))
+
+            # 원문 표현 차용(소화 원칙) — 원문이 주어진 학생만, WARN으로만.
+            # FAIL이 아닌 이유: 짧은 답안은 어쩔 수 없이 겹치고, 재서술이
+            # 나은지의 최종 판단은 교사 몫이다(평가자 주권).
+            if sources and not exempt and (ci, si) not in invalid:
+                src = sources.get(token, "")
+                if src:
+                    cov, run = borrow_stats(text, src)
+                    if cov >= BORROW_COV or run >= BORROW_RUN:
+                        issues.append(("WARN", "BORROWED",
+                                       f"원문 표현 차용 {cov:.0%}·최장 {run}자 — 학생 문구를 "
+                                       "교사 언어로 재서술 검토(작은따옴표 인용 제외 기준)"))
 
             fail += sum(1 for lv, _, _ in issues if lv == "FAIL")
             warn += sum(1 for lv, _, _ in issues if lv == "WARN")
@@ -457,6 +503,9 @@ def main(argv=None) -> int:
     parser.add_argument("--expected-count", type=int, dest="expected_count",
                          help="교사가 선언하는 이번 활동의 대상 인원(명렬·초안에서 세지 말 것). "
                               "--save 시 이 값 또는 활동프로파일의 '인원'이 반드시 있어야 한다")
+    parser.add_argument("--sources",
+                        help='토큰본 JSON 경로(선택, 토큰 단계 전용) — {"items":[{"토큰","본문"}]}. '
+                             "주면 원문 표현 차용(BORROWED) 검사를 수행한다")
     parser.add_argument("--save", help="검증 통과 시 저장할 xlsx 경로")
     args = parser.parse_args(argv)
 
@@ -497,7 +546,14 @@ def main(argv=None) -> int:
         return 1
 
     if stage == "token":
-        report = verify_token_drafts(drafts, profile)
+        sources = None
+        if args.sources:
+            src_data = json.load(open(args.sources, encoding="utf-8"))
+            sources = {str(it.get("토큰", "")): str(it.get("본문", ""))
+                       for it in src_data.get("items", [])}
+        else:
+            print("원문 차용 검사 생략(--sources 토큰본.json 미지정)")
+        report = verify_token_drafts(drafts, profile, sources=sources)
         for row in report["rows"]:
             # 표시는 유효 토큰이거나 "N번째 학생"(선검증 위반)뿐이다 — 형식
             # 위반 토큰 값은 rows에 없으므로 이 줄로는 절대 나갈 수 없다.
@@ -543,6 +599,11 @@ def main(argv=None) -> int:
         # 명렬과 이름이 일치한다는 결과는 "형식이 맞다"는 것 이상을 의미하지 않는다.
         print("명렬 대조: 형식 일치만 확인했습니다(이름 출처가 명렬이므로 오귀속은 증명되지 않습니다).")
 
+    if args.sources:
+        # 실명 단계 초안은 학번 키라 토큰본과 바로 짝지을 수 없다. 차용 검사는
+        # §6 토큰 단계의 몫이고, 여기서 조용히 못 본 척하면 사용자는 검사가
+        # 됐다고 믿는다 — 안 했다고 말한다.
+        print("원문 차용 검사는 토큰 단계 전용입니다 — --sources를 무시합니다(§6에서 수행하세요)")
     report = verify_drafts(drafts, profile, roster=roster, submitted=submitted)
 
     # 매핑 값 검증 결과는 행별 출력보다 먼저 알린다 — 번역된 행을 읽기 전에
