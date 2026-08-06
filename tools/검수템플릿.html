@@ -186,6 +186,9 @@ button{font:inherit; color:inherit;}
   font-family:var(--serif);
   background:var(--sunken); padding:var(--s4); font-size:var(--t-body); line-height:1.9;
   min-height:16rem; white-space:pre-wrap;
+  /* 긴 답안이 지면을 끝없이 늘이지 않게 — 원문은 칸 안에서 스크롤한다.
+     세특 칸(edit)은 제한하지 않는다: 교사가 고치는 글이 잘려 보이면 안 된다. */
+  max-height:min(52vh, 34rem); overflow-y:auto; overscroll-behavior:contain;
 }
 .read.empty{color:var(--ink-3); font-family:var(--gothic); line-height:1.7;}
 /* 세특 — 지금 손대는 칸이므로 청 테두리. 굵은 링은 실제로 손댈 때만 켠다 */
